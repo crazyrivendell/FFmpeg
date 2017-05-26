@@ -672,6 +672,7 @@ static void add_input_streams(OptionsContext *o, AVFormatContext *ic)
         ist->nb_samples = 0;
         ist->min_pts = INT64_MAX;
         ist->max_pts = INT64_MIN;
+        av_log(NULL, AV_LOG_DEBUG, "[wml] add_input_streams stream[%d],  discard[%d] \n", ist->st->index, ist->st->discard );
 
         ist->ts_scale = 1.0;
         MATCH_PER_STREAM_OPT(ts_scale, dbl, ist->ts_scale, ic, st);
@@ -1415,6 +1416,7 @@ static OutputStream *new_output_stream(OptionsContext *o, AVFormatContext *oc, e
         ost->sync_ist = input_streams[source_index];
         input_streams[source_index]->discard = 0;
         input_streams[source_index]->st->discard = input_streams[source_index]->user_set_discard;
+        av_log(NULL, AV_LOG_DEBUG, "[wml] new_output_stream stream[%d],  discard[%d] \n", input_streams[source_index]->st->index, input_streams[source_index]->discard);
     }
     ost->last_mux_dts = AV_NOPTS_VALUE;
 
@@ -2122,6 +2124,7 @@ static int open_output_file(OptionsContext *o, const char *filename)
                     if(ost->st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) ost->avfilter = av_strdup("null");
                     ist->discard = 0;
                     ist->st->discard = ist->user_set_discard;
+                    av_log(NULL, AV_LOG_DEBUG, "[wml] open_output_file stream[%d],  discard[%d] \n", ist->st->index, ist->st->discard);
                     break;
                 }
             }

@@ -4301,8 +4301,6 @@ AVProgram *av_new_program(AVFormatContext *ac, int id)
     AVProgram *program = NULL;
     int i;
 
-    av_log(ac, AV_LOG_TRACE, "new_program: id=0x%04x\n", id);
-
     for (i = 0; i < ac->nb_programs; i++)
         if (ac->programs[i]->id == id)
             program = ac->programs[i];
@@ -4320,7 +4318,7 @@ AVProgram *av_new_program(AVFormatContext *ac, int id)
 
     program->start_time =
     program->end_time   = AV_NOPTS_VALUE;
-
+    av_log(ac, AV_LOG_TRACE, "[wml] new_program: id=0x%04x discard=%d\n", id,program->discard);
     return program;
 }
 

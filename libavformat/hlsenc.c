@@ -644,7 +644,7 @@ static int hls_start(AVFormatContext *s)
     AVDictionary *options = NULL;
     char *filename, iv_string[KEYSIZE*2 + 1];
     int err = 0;
-
+    av_log(oc, AV_LOG_DEBUG, "[wml] hlssenc hls_start \n");
     if (c->flags & HLS_SINGLE_FILE) {
         av_strlcpy(oc->filename, c->basename,
                    sizeof(oc->filename));
@@ -769,7 +769,7 @@ static int hls_write_header(AVFormatContext *s)
     AVDictionary *options = NULL;
     int basename_size;
     int vtt_basename_size;
-
+    av_log(s, AV_LOG_DEBUG, "[wml] hlssenc hls_write_header \n");
     hls->sequence       = hls->start_sequence;
     hls->recording_time = (hls->init_time ? hls->init_time : hls->time) * AV_TIME_BASE;
     hls->start_pts      = AV_NOPTS_VALUE;
@@ -950,6 +950,7 @@ static int hls_write_packet(AVFormatContext *s, AVPacket *pkt)
     int ret, can_split = 1;
     int stream_index = 0;
 
+    av_log(s, AV_LOG_DEBUG, "[wml] hlssenc hls_write_packet \n");
     if (hls->sequence - hls->nb_entries > hls->start_sequence && hls->init_time > 0) {
         /* reset end_pts, hls->recording_time at end of the init hls list */
         int init_list_dur = hls->init_time * hls->nb_entries * AV_TIME_BASE;

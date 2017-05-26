@@ -116,7 +116,7 @@ static int parse_playlist(URLContext *h, const char *url)
     int64_t duration = 0;
     char line[1024];
     const char *ptr;
-
+    av_log(h, AV_LOG_DEBUG, "[wml] hlsproto--parse_playlist in:  %s\n",url);
     if ((ret = ffio_open_whitelist(&in, url, AVIO_FLAG_READ,
                                    &h->interrupt_callback, NULL,
                                    h->protocol_whitelist, h->protocol_blacklist)) < 0)
@@ -196,6 +196,7 @@ static int hls_open(URLContext *h, const char *uri, int flags)
     int ret, i;
     const char *nested_url;
 
+    av_log(h, AV_LOG_DEBUG, "[wml] hlsproto hls_open in %s\n", uri);
     if (flags & AVIO_FLAG_WRITE)
         return AVERROR(ENOSYS);
 

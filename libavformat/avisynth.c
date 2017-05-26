@@ -597,7 +597,7 @@ static void avisynth_next_stream(AVFormatContext *s, AVStream **st,
         *discard = 1;
     else
         *discard = 0;
-
+    av_log(s,AV_LOG_DEBUG, "[wml] avisynth_next_stream curr_stream=%d",avs->curr_stream);
     return;
 }
 
@@ -617,8 +617,10 @@ static int avisynth_read_packet_video(AVFormatContext *s, AVPacket *pkt,
 
     /* This must happen even if the stream is discarded to prevent desync. */
     n = avs->curr_frame++;
-    if (discard)
+    if (discard){
+        av_log(s,AV_LOG_DEBUG, "[wml] avisynth_read_packet_video curr_stream=%d",avs->curr_stream);
         return 0;
+    }
 
 #ifdef USING_AVISYNTH
     /* Detect whether we're using AviSynth 2.6 or AviSynth+ by
@@ -745,9 +747,10 @@ static int avisynth_read_packet_audio(AVFormatContext *s, AVPacket *pkt,
     /* This must happen even if the stream is discarded to prevent desync. */
     n                 = avs->curr_sample;
     avs->curr_sample += samples;
-    if (discard)
+    if (discard){
+        av_log(s,AV_LOG_DEBUG, "[wml] avisynth_read_packet_audio curr_stream=%d",avs->curr_stream);
         return 0;
-
+    }
     pkt->size = avs_bytes_per_channel_sample(avs->vi) *
                 samples * avs->vi->nchannels;
     if (!pkt->size)
@@ -801,6 +804,7 @@ static int avisynth_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     /* If either stream reaches EOF, try to read the other one before
      * giving up. */
+    av_log(s,AV_LOG_DEBUG, "[wml] avisynth_read_packet curr_stream=%d",avs->curr_stream);
     avisynth_next_stream(s, &st, pkt, &discard);
     if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO) {
         ret = avisynth_read_packet_video(s, pkt, discard);

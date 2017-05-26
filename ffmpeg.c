@@ -3489,13 +3489,14 @@ static int transcode_init(void)
         for (j = 0; j < ifile->ctx->nb_programs; j++) {
             AVProgram *p = ifile->ctx->programs[j];
             int discard  = AVDISCARD_ALL;
-
             for (k = 0; k < p->nb_stream_indexes; k++)
                 if (!input_streams[ifile->ist_index + p->stream_index[k]]->discard) {
                     discard = AVDISCARD_DEFAULT;
+                    av_log(oc, AV_LOG_INFO, "[wml] stream_index %d discard:%d\n",k,discard);
                     break;
                 }
             p->discard = discard;
+            av_log(oc, AV_LOG_INFO, "[wml] AVProgram %d discard:%d\n",j,discard);
         }
     }
 

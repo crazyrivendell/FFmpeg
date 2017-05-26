@@ -1418,6 +1418,12 @@ typedef struct AVFormatContext {
     int64_t start_time;
 
     /**
+     * fov of the first frame of the component
+     * Demuxing only, set by libavformat.
+     */
+    int offset;
+
+    /**
      * Duration of the stream, in AV_TIME_BASE fractional
      * seconds. Only set this value if you know none of the individual stream
      * durations and also do not set any of them. This is deduced from the

@@ -31,6 +31,8 @@
 #endif
 #include "url.h"
 
+//#include "bitrate_manager.h"
+
 /** @name Logging context. */
 /*@{*/
 static const char *urlcontext_to_name(void *ptr)
@@ -313,6 +315,8 @@ int ffurl_open_whitelist(URLContext **puc, const char *filename, int flags,
 {
     AVDictionary *tmp_opts = NULL;
     AVDictionaryEntry *e;
+
+    //av_log(NULL, AV_LOG_DEBUG, "[wml] ffurl_open_whitelist in");
     int ret = ffurl_alloc(puc, filename, flags, int_cb);
     if (ret < 0)
         return ret;
@@ -357,6 +361,7 @@ fail:
 int ffurl_open(URLContext **puc, const char *filename, int flags,
                const AVIOInterruptCB *int_cb, AVDictionary **options)
 {
+    //av_log(NULL, AV_LOG_DEBUG, "[wml] ffurl_open in");
     return ffurl_open_whitelist(puc, filename, flags,
                                 int_cb, options, NULL, NULL, NULL);
 }
@@ -466,6 +471,7 @@ int ffurl_closep(URLContext **hh)
 
 int ffurl_close(URLContext *h)
 {
+    //av_log(NULL, AV_LOG_DEBUG, "[wml] ffurl_close in");
     return ffurl_closep(&h);
 }
 
