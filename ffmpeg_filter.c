@@ -286,7 +286,6 @@ static void init_input_filter(FilterGraph *fg, AVFilterInOut *in)
     ist->discard         = 0;
     ist->decoding_needed |= DECODING_FOR_FILTER;
     ist->st->discard = AVDISCARD_NONE;
-    av_log(NULL, AV_LOG_DEBUG, "[wml] init_input_filter stream[%d],  discard[%d] \n", ist->st->index, ist->st->discard );
 
     GROW_ARRAY(fg->inputs, fg->nb_inputs);
     if (!(fg->inputs[fg->nb_inputs - 1] = av_mallocz(sizeof(*fg->inputs[0]))))

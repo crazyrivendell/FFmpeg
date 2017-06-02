@@ -1004,7 +1004,7 @@ skip:
                 return AVERROR(ENOMEM);
 
         }
-        av_log(s, AV_LOG_TRACE, "[wml] %d %X %d \n", stream_type, flags, st->discard);
+        av_log(s, AV_LOG_TRACE, "%d %X %d \n", stream_type, flags, st->discard);
 
         if (s->pb->seekable &&
             ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_KEY ||

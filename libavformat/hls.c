@@ -209,9 +209,13 @@ typedef struct HLSContext {
     char *http_proxy;                    ///< holds the address of the HTTP proxy server
     AVDictionary *avio_opts;
     int strict_std_compliance;
+
+    int offset;
 } HLSContext;
 
-# ifdef DYNAMIC_STREAM
+static int changed_flag = 0;
+
+#if DYNAMIC_STREAM
 
 typedef struct playlist_list {
     int index;
@@ -221,7 +225,7 @@ typedef struct playlist_list {
 static int isdynamicstream= 0;
 static int changed_first = 0;
 static int changed_test = 0;
-static int changed_flag = 0;
+
 static void* playlist_copy;
 
 static int create_playlistlist(HLSContext *c){
@@ -1299,13 +1303,16 @@ static int64_t default_reload_interval(struct playlist *pls)
                           pls->target_duration;
 }
 
+static int select_cur_seq_no(HLSContext *c, struct playlist *pls);
+static int find_timestamp_in_playlist(HLSContext *c, struct playlist *pls,int64_t timestamp, int *seq_no);
 static int read_data(void *opaque, uint8_t *buf, int buf_size)
 {
     struct playlist *v = opaque;
     HLSContext *c = v->parent->priv_data;
-    int ret,i,u;
+    int ret,i,u = 0;
+    int next_seg = 0;
     int just_opened = 0;
-   av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist in %d url=%s, needed=%d,cur=%d.\n",v->index,v->url, v->needed,v->cur_seq_no);
+   //av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist in %d url=%s, needed=%d,cur=%d.\n",v->index,v->url, v->needed,v->cur_seq_no);
 restart:
     if (!v->needed)
         return AVERROR_EOF;
@@ -1315,12 +1322,10 @@ restart:
         struct segment *seg;
 
         /* Check that the playlist is still needed before opening a new segment. */
-        
-        av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist[%d] url=%s changed_test=%d %d-%d.\n",v->index,v->url,changed_test,v->cur_seq_no, c->cur_seq_no);
         if (v->ctx && v->ctx->nb_streams) {
             v->needed = 0;
             for (i = 0; i < v->n_main_streams; i++) {
-                av_log(NULL, AV_LOG_INFO, "[wml] read_data playlist[%d]  discard = %d\n",v->index, v->main_streams[i]->discard);
+                //av_log(NULL, AV_LOG_INFO, "[wml] read_data playlist[%d]  discard = %d\n",v->index, v->main_streams[i]->discard);
                 if (v->main_streams[i]->discard < AVDISCARD_ALL) {
                     v->needed = 1;
                     break;
@@ -1328,7 +1333,7 @@ restart:
             }
         }
         if (!v->needed) {
-            av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist out 0 playlist %d\n",v->index);
+            av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist out 0 playlist %s\n",v->url);
             return AVERROR_EOF;
         }
 
@@ -1337,20 +1342,24 @@ restart:
         reload_interval = default_reload_interval(v);
 
 reload:
-        av_log(v->parent, AV_LOG_DEBUG, "[wml] read_data parse_playlist before %d %ld %ld\n",v->finished, av_gettime_relative() - v->last_load_time, reload_interval);
+        av_log(v->parent, AV_LOG_DEBUG, "[wml] read_data parse_playlist before %d %llu %llu cur_seq_no=%d.\n",v->finished, av_gettime_relative() - v->last_load_time, reload_interval,v->cur_seq_no);
+       // #if DYNAMIC_STREAM
         if ((!v->finished && av_gettime_relative() - v->last_load_time >= reload_interval) ||changed_flag) {
+        //#else
+        //if (!v->finished && av_gettime_relative() - v->last_load_time >= reload_interval) {
+        //#endif
             if ((ret = parse_playlist(c, v->url, v, NULL)) < 0) {
                 av_log(v->parent, AV_LOG_WARNING, "[wml] read_data playlist out 1 playlist %d\n",v->index);
                 return ret;
             }
-            #ifdef DYNAMIC_STREAM
+            #if DYNAMIC_STREAM
             changed_flag = 0;
             #endif
-            av_log(v->parent, AV_LOG_DEBUG, "[wml] read_data parse_playlist after  %s -%s.\n",v->url, v->segments[v->cur_seq_no-v->start_seq_no]->url);
             /* If we need to reload the playlist again below (if
              * there's still no more segments), switch to a reload
              * interval of half the target duration. */
             reload_interval = v->target_duration / 2;
+            av_log(v->parent, AV_LOG_DEBUG, "[wml] read_data parse_playlist after  %s -%s %llu %llu %llu.\n",v->url, v->segments[v->cur_seq_no-v->start_seq_no]->url,reload_interval,av_gettime_relative(),v->last_load_time);
         }
         if (v->cur_seq_no < v->start_seq_no) {
             av_log(NULL, AV_LOG_WARNING,
@@ -1382,7 +1391,7 @@ reload:
             return ret;
         	}
         ret = open_input(c, v, seg);
-        av_log(v->parent,AV_LOG_DEBUG, "[wml] read_data open_input pls[%d]--%s,seg[%d]--%s ret=%d", v->index,v->url,v->cur_seq_no-v->start_seq_no,seg->url, ret);
+        //av_log(v->parent,AV_LOG_DEBUG, "[wml] read_data open_input pls[%d]--%s,seg[%d]--%s ret=%d", v->index,v->url,v->cur_seq_no-v->start_seq_no,seg->url, ret);
         if (ret < 0) {
             if (ff_check_interrupt(c->interrupt_callback)){
                 av_log(v->parent, AV_LOG_INFO, "[wml] read_data playlist out 5  %d url=%s\n",v->index,v->url);
@@ -1417,44 +1426,87 @@ reload:
     }
     ff_format_io_close(v->parent, &v->input);
     v->cur_seq_no++;
-
     c->cur_seq_no = v->cur_seq_no;
 
-#ifdef DYNAMIC_STREAM
-    if(!isdynamicstream){
-         if(!create_playlistlist (c)){
-                av_log(NULL,AV_LOG_ERROR,"[wml] create_playlist error. \n");
-            }
-    }
-    v->needed = 0;
-    for (i = 0; i < v->n_main_streams; i++) {
-        if (v->main_streams[i]->discard < AVDISCARD_ALL) {
-            v->needed = 1;
-            break;
+#if DYNAMIC_STREAM
+    av_log(NULL,AV_LOG_DEBUG,"[wml] OFFSET=%d. \n", v->parent->offset);
+    if(v->parent->offset){
+        if(!isdynamicstream){
+             if(!create_playlistlist (c)){
+                    av_log(NULL,AV_LOG_ERROR,"[wml] create_playlist error. \n");
+                }
         }
-    }
-    if(isdynamicstream && v->cur_seq_no && !changed_flag && v->needed){
-        if(!changed_first){
-            changed_test = v->index + 1;
-            changed_first = 1;
-        }
-        else
-            changed_test +=1;
-        if(changed_test == c->n_playlists)
-            changed_test = 0;
-        for (u = 0; u < c->n_playlists; u++) {
-            struct playlist_list *p_list = playlist_copy + u* sizeof(struct playlist_list);
-            av_log(NULL, AV_LOG_DEBUG, "[wml] read_data playlist_list %d  %s.\n", u, p_list->url);
-            if(u == changed_test){
-                strcpy(v->url, p_list->url);
-                av_log(NULL, AV_LOG_DEBUG, "[wml] read_data change to play[%d] %s changed_test=%d.\n", v->index, v->url,changed_test);
+        v->needed = 0;
+        for (i = 0; i < v->n_main_streams; i++) {
+            if (v->main_streams[i]->discard < AVDISCARD_ALL) {
+                v->needed = 1;
+                int64_t cur_dts = v->main_streams[i]->cur_dts * 10;
+                av_log(NULL, AV_LOG_DEBUG,"[wml] read_data streaminfo cur_dts=%llu.\n",cur_dts);
+                while (u < v->n_segments) {
+                    cur_dts -= v->segments[u]->duration;
+                    u += 1;
+                    if (cur_dts < 0) {
+                        next_seg = v->start_seq_no + u -1;
+                        break;
+                    }
+                }
+                av_log(NULL, AV_LOG_DEBUG,"[wml] read_data streaminfo next_seg=%d.\n",next_seg);
+                break;
             }
         }
-        changed_flag = 1;
+        if(isdynamicstream && v->cur_seq_no && !changed_flag && v->needed){
+            if(!changed_first){
+                changed_test = v->index + 1;
+                changed_first = 1;
+            }
+            else
+                changed_test +=1;
+            if(changed_test == c->n_playlists)
+                changed_test = 0;
+            #if 1
+            for (u = 0; u < c->n_playlists; u++) {
+                struct playlist_list *p_list = playlist_copy + u* sizeof(struct playlist_list);
+                if(u == changed_test){
+                    strcpy(v->url, p_list->url);
+                    v->index = changed_test;
+                    av_log(NULL, AV_LOG_DEBUG, "[wml] read_data change to play[%d] %s changed_test=%d cur_seg_offset=%llu.\n",v->index, v->url,changed_test,v->cur_seg_offset);
+                }
+            }
+            #else
+            for (u = 0; u < c->n_playlists; u++) {
+                struct playlist *pls = c->playlists[u];
+                if(u == changed_test){
+                    pls->cur_needed = 1;
+                    //pls->needed = 1;
+                    if (pls->ctx && pls->ctx->nb_streams) {
+                        for (i = 0; i < pls->n_main_streams; i++) {
+                            pls->main_streams[i]->discard = AVDISCARD_DEFAULT;
+                            av_log(NULL, AV_LOG_DEBUG, "[wml] read_data playlist[%d] discard[%d], main_stream[%d] %d.\n",u,pls->main_streams[i]->discard,i, pls->main_streams[i]->index);
+                        }
+                    }
+                    av_log(NULL, AV_LOG_DEBUG, "[wml] read_data change  to playlist[%d] %s\n",u,pls->url);
+                    pls->cur_seq_no = c->cur_seq_no;
+                    v = pls;
+                }
+                else{
+                    pls->cur_needed = 0;
+                    pls->needed = 0;
+                    if (pls->ctx && pls->ctx->nb_streams) {
+                        for (i = 0; i < pls->n_main_streams; i++) {
+                            pls->main_streams[i]->discard = AVDISCARD_ALL;
+                            av_log(NULL, AV_LOG_DEBUG, "[wml] read_data playlist[%d] discard[%d], main_stream[%d] %d.\n",u,pls->main_streams[i]->discard,i, pls->main_streams[i]->index);
+                        }
+                    }
+                }
+            }
+            #endif
+            changed_flag = 1;
+        }
+        v->parent->offset = 0;
     }
 #endif
 
-    av_log(v->parent, AV_LOG_INFO, "[wml] read_data goto restart playlist[%d] url=%s\n",v->index,v->url);
+    av_log(v->parent, AV_LOG_INFO, "[wml] read_data goto restart playlist[%d] url=%s cur_seq_no=%d %d.\n",v->index,v->url,v->cur_seq_no, select_cur_seq_no(c, v));
     goto restart;
 }
 
@@ -1539,7 +1591,6 @@ static int find_timestamp_in_playlist(HLSContext *c, struct playlist *pls,
     }
 
     *seq_no = pls->start_seq_no + pls->n_segments - 1;
-
     return 0;
 }
 
@@ -1928,10 +1979,8 @@ static int recheck_discard_flags(AVFormatContext *s, int first)
         if (pls->cur_needed && !pls->needed) {
             pls->needed = 1;
             changed = 1;
-            #ifndef DYNAMIC_STREAM
-            pls->cur_seq_no = select_cur_seq_no(c, pls);
-            #endif
-            //pls->cur_seq_no = c->cur_seq_no;
+            //pls->cur_seq_no = select_cur_seq_no(c, pls);
+            pls->cur_seq_no = c->cur_seq_no;
             pls->pb.eof_reached = 0;
             if (c->cur_timestamp != AV_NOPTS_VALUE) {
                 /* catch up */
@@ -1939,7 +1988,7 @@ static int recheck_discard_flags(AVFormatContext *s, int first)
                 pls->seek_flags = AVSEEK_FLAG_ANY;
                 pls->seek_stream_index = -1;
             }
-            av_log(s, AV_LOG_DEBUG, "[wml] recheck_discard_flags Now receiving playlist[%d], %s, segment %d %ld\n", i,pls->url, pls->cur_seq_no, c->cur_timestamp);
+            av_log(s, AV_LOG_DEBUG, "[wml] recheck_discard_flags Now receiving playlist[%d], %s, segment %d %llu\n", i,pls->url, pls->cur_seq_no, c->cur_timestamp);
         } else if (first && !pls->cur_needed && pls->needed) {
             if (pls->input)
                 ff_format_io_close(pls->parent, &pls->input);
@@ -1947,34 +1996,6 @@ static int recheck_discard_flags(AVFormatContext *s, int first)
             changed = 1;
             av_log(s, AV_LOG_DEBUG, "No longer receiving playlist %d\n", i);
         }
-        /*if(!pls->input ){
-            //av_log(s, AV_LOG_DEBUG, "[wml] %d = %d\n",i,changed_test);	
-            if(i == changed_test){
-                pls->cur_needed = 1;
-                pls->needed = 1;
-                changed_test = i + 1;
-                if(changed_test == c->n_playlists)
-                    changed_test = 0;
-                av_log(s, AV_LOG_DEBUG, "[wml] %d\n",changed_test);
-                if (pls->ctx && pls->ctx->nb_streams) {
-                    for (i = 0; i < pls->n_main_streams; i++) {
-                        pls->main_streams[i]->discard = AVDISCARD_DEFAULT;
-                        av_log(s, AV_LOG_DEBUG, "[wml] discard[%d] %d, main_stream[%d] %d.\n",pls->main_streams[i]->discard, pls->n_main_streams,i, pls->main_streams[i]->index);
-                    }
-                }
-                av_log(s, AV_LOG_DEBUG, "[wml] recheck_discard_flags  change playlist[%d] to playlist[%d]\n",i, changed_test);
-            }
-            else{
-                pls->cur_needed = 0;
-                pls->needed = 0;
-                if (pls->ctx && pls->ctx->nb_streams) {
-                    for (i = 0; i < pls->n_main_streams; i++) {
-                        pls->main_streams[i]->discard = AVDISCARD_ALL;
-                        av_log(s, AV_LOG_DEBUG, "[wml] discard[%d] %d, main_stream[%d] %d.\n",pls->main_streams[i]->discard, pls->n_main_streams,i, pls->main_streams[i]->index);
-                    }
-                }
-            }
-        }*/
     }
     return changed;
 }
@@ -2037,16 +2058,17 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
          * stream */
         //av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet: playlists[%d], url[%s], needed-%d,cur_needed-%d\n",i, pls->url,pls->needed,pls->cur_needed);
         if (pls->needed && !pls->pkt.data) {
-            //av_log(NULL, AV_LOG_DEBUG, "[wml] hls_read_packet:playlists[%d]  %d, %ld\n",i,pls->cur_seq_no,pls->cur_seg_offset);
+            av_log(NULL, AV_LOG_DEBUG, "[wml] hls_read_packet:playlists[%d]  %d, %llu\n",i,pls->cur_seq_no,pls->cur_seg_offset);
             while (1) {
                 int64_t ts_diff;
                 AVRational tb;
                 ret = av_read_frame(pls->ctx, &pls->pkt);
                 if (ret < 0) {
                     if (!avio_feof(&pls->pb) && ret != AVERROR_EOF){
-                        av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_packet out-0.\n");
+                        av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet out-0.\n");
 		      return ret;
                     }
+                    av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet reset_packet.\n");
                     reset_packet(&pls->pkt);
                     break;
                 } else {
@@ -2113,7 +2135,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (ret < 0) {
             av_packet_unref(&pls->pkt);
             reset_packet(&pls->pkt);
-            av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_packet out-1.\n");
+            av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet out-1.\n");
             return ret;
         }
 
@@ -2128,7 +2150,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                    pls->pkt.stream_index, pls->n_main_streams, pls->ctx->nb_streams);
             av_packet_unref(&pls->pkt);
             reset_packet(&pls->pkt);
-            av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_packet out-2.\n");
+            av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet out-2.\n");
             return AVERROR_BUG;
         }
 
@@ -2163,10 +2185,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
                 if (pkt->pts != AV_NOPTS_VALUE && pkt->pts + pred < max_ts) pkt->pts += pred;
             }
         }
-        //av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_packet out-3.\n");
+        //av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet out-3.\n");
         return 0;
     }
-    av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_packet out-4.\n");
+    av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet out-4.\n");
     return AVERROR_EOF;
 }
 
@@ -2179,7 +2201,7 @@ static int hls_close(AVFormatContext *s)
     free_rendition_list(c);
 
     av_dict_free(&c->avio_opts);
-    #ifdef DYNAMIC_STREAM
+    #if DYNAMIC_STREAM
     free_playlistlist();
     #endif
     return 0;

@@ -1158,7 +1158,6 @@ static void stream_component_close(VideoState *is, int stream_index)
     }
 
     ic->streams[stream_index]->discard = AVDISCARD_ALL;
-    av_log(NULL, AV_LOG_DEBUG, "[wml] stream_component_close stream[%d] discard[%d]-\n",stream_index, ic->streams[stream_index]->discard);
     switch (codecpar->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
         is->audio_st = NULL;
@@ -2624,7 +2623,6 @@ static int stream_component_open(VideoState *is, int stream_index)
 
     is->eof = 0;
     ic->streams[stream_index]->discard = AVDISCARD_DEFAULT;
-    av_log(NULL, AV_LOG_DEBUG, "[wml] stream_component_open stream[%d] discard[%d]-\n",stream_index, ic->streams[stream_index]->discard);
     switch (avctx->codec_type) {
     case AVMEDIA_TYPE_AUDIO:
 #if CONFIG_AVFILTER
@@ -2847,7 +2845,6 @@ static int read_thread(void *arg)
         AVStream *st = ic->streams[i];
         enum AVMediaType type = st->codecpar->codec_type;
         st->discard = AVDISCARD_ALL;
-        av_log(NULL, AV_LOG_DEBUG, "[wml]stream[%d], discard: %d\n", i, st->discard);
         if (type >= 0 && wanted_stream_spec[type] && st_index[type] == -1)
             if (avformat_match_stream_specifier(ic, st, wanted_stream_spec[type]) > 0)
                 st_index[type] = i;

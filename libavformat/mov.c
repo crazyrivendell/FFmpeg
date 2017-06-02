@@ -5112,7 +5112,6 @@ static void mov_read_chapters(AVFormatContext *s)
             st->codecpar->codec_type = AVMEDIA_TYPE_DATA;
             st->codecpar->codec_id = AV_CODEC_ID_BIN_DATA;
             st->discard = AVDISCARD_ALL;
-            av_log(s, AV_LOG_DEBUG, "[wml] stream[%d] id[%d] set discard to %d \n",st->index,st->id,st->discard);
             for (i = 0; i < st->nb_index_entries; i++) {
                 AVIndexEntry *sample = &st->index_entries[i];
                 int64_t end = i+1 < st->nb_index_entries ? st->index_entries[i+1].timestamp : st->duration;
