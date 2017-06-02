@@ -1601,7 +1601,9 @@ typedef struct AVPacket {
     uint8_t *data;
     int   size;
     int   stream_index;
-    int   playlist_index; /*[wml]*/
+
+    int offset; /*[wml] identify which fov is belong to*/
+    
     /**
      * A combination of AV_PKT_FLAG values
      */

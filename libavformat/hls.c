@@ -1429,8 +1429,8 @@ reload:
     c->cur_seq_no = v->cur_seq_no;
 
 #if DYNAMIC_STREAM
-    av_log(NULL,AV_LOG_DEBUG,"[wml] OFFSET=%d. \n", v->parent->offset);
-    if(v->parent->offset){
+    av_log(NULL,AV_LOG_DEBUG,"[wml] offset_req=%d OFFSET=%d. \n",v->parent->offset_req, v->parent->offset);
+    if(v->parent->offset_req){
         if(!isdynamicstream){
              if(!create_playlistlist (c)){
                     av_log(NULL,AV_LOG_ERROR,"[wml] create_playlist error. \n");
@@ -1441,7 +1441,7 @@ reload:
             if (v->main_streams[i]->discard < AVDISCARD_ALL) {
                 v->needed = 1;
                 int64_t cur_dts = v->main_streams[i]->cur_dts * 10;
-                av_log(NULL, AV_LOG_DEBUG,"[wml] read_data streaminfo cur_dts=%llu.\n",cur_dts);
+                av_log(NULL, AV_LOG_DEBUG,"[wml] read_data streaminfo cur_dts=%llu index=%d id=%d.\n",cur_dts,v->main_streams[i]->index,v->main_streams[i]->id);
                 while (u < v->n_segments) {
                     cur_dts -= v->segments[u]->duration;
                     u += 1;
@@ -1463,6 +1463,7 @@ reload:
                 changed_test +=1;
             if(changed_test == c->n_playlists)
                 changed_test = 0;
+            //TODO: offset's value and playlist id need to be process
             #if 1
             for (u = 0; u < c->n_playlists; u++) {
                 struct playlist_list *p_list = playlist_copy + u* sizeof(struct playlist_list);
@@ -1502,7 +1503,7 @@ reload:
             #endif
             changed_flag = 1;
         }
-        v->parent->offset = 0;
+        v->parent->offset_req = 0;
     }
 #endif
 
@@ -2058,7 +2059,7 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
          * stream */
         //av_log(s, AV_LOG_DEBUG, "[wml] hls_read_packet: playlists[%d], url[%s], needed-%d,cur_needed-%d\n",i, pls->url,pls->needed,pls->cur_needed);
         if (pls->needed && !pls->pkt.data) {
-            av_log(NULL, AV_LOG_DEBUG, "[wml] hls_read_packet:playlists[%d]  %d, %llu\n",i,pls->cur_seq_no,pls->cur_seg_offset);
+            //av_log(NULL, AV_LOG_DEBUG, "[wml] hls_read_packet:playlists[%d]  %d, %llu\n",i,pls->cur_seq_no,pls->cur_seg_offset);
             while (1) {
                 int64_t ts_diff;
                 AVRational tb;

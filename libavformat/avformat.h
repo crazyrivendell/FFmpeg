@@ -1421,7 +1421,9 @@ typedef struct AVFormatContext {
      * fov of the first frame of the component
      * Demuxing only, set by libavformat.
      */
-    int offset; /*[wml]*/
+    int offset_req;
+    int offset; /*[wml] fov*/
+    
 
     /**
      * current segments when play hls queue index
