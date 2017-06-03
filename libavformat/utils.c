@@ -1673,7 +1673,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     if (s->debug & FF_FDEBUG_TS)
         av_log(s, AV_LOG_DEBUG,
-               "read_frame_internal stream=%d, pts=%s, dts=%s, "
+               "[wml] read_frame_internal stream=%d, pts=%s, dts=%s, "
                "size=%d, duration=%"PRId64", flags=%d\n",
                pkt->stream_index,
                av_ts2str(pkt->pts),
