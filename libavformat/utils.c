@@ -445,7 +445,9 @@ static int add_to_pktbuf(AVPacketList **packet_buffer, AVPacket *pkt,
         *packet_buffer = pktl;
 
     /* Add the packet in the buffered packet list. */
+    /* wml  here add to packetbuffer*/
     *plast_pktl = pktl;
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] add_to_pktbuf packet_buffer=%x pkt=%x pktsize=%d offset=%d",*packet_buffer,pkt,pkt->size,pkt->offset);
     return 0;
 }
 
@@ -802,6 +804,7 @@ int ff_read_packet(AVFormatContext *s, AVPacket *pkt)
         pkt->data = NULL;
         pkt->size = 0;
         av_init_packet(pkt);
+        //av_log(NULL,AV_LOG_DEBUG,"[wml] ff_read_packet ctx=%x name=%s pkt=%x  offset=%d",s,s->iformat->name,pkt,pkt->offset);
         ret = s->iformat->read_packet(s, pkt);
         if (ret < 0) {
             /* Some demuxers return FFERROR_REDO when they consume
@@ -867,6 +870,12 @@ int ff_read_packet(AVFormatContext *s, AVPacket *pkt)
         if (!pktl && st->request_probe <= 0)
             return ret;
 
+        /* wml */
+        if((strcmp(s->iformat->name, "mpegts") == 0) ||(strcmp(s->iformat->name, "flv") == 0))
+        {
+            pkt->offset = s->offset;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] ff_read_packet ctx=%x pkt=%x set offset=%d",s,pkt,pkt->offset);
+        }
         err = add_to_pktbuf(&s->internal->raw_packet_buffer, pkt,
                             &s->internal->raw_packet_buffer_end, 0);
         if (err)
@@ -1578,6 +1587,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
         if (!st->need_parsing || !st->parser) {
             /* no parsing needed: we just output the packet as is */
             *pkt = cur_pkt;
+
             compute_pkt_fields(s, st, NULL, pkt, AV_NOPTS_VALUE, AV_NOPTS_VALUE);
             if ((s->iformat->flags & AVFMT_GENERIC_INDEX) &&
                 (pkt->flags & AV_PKT_FLAG_KEY) && pkt->dts != AV_NOPTS_VALUE) {
@@ -1670,15 +1680,15 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #if FF_API_LAVF_AVCTX
     update_stream_avctx(s);
 #endif
-
+    
     if (s->debug & FF_FDEBUG_TS)
         av_log(s, AV_LOG_DEBUG,
                "[wml] read_frame_internal stream=%d, pts=%s, dts=%s, "
-               "size=%d, duration=%"PRId64", flags=%d\n",
+               "size=%d, duration=%"PRId64", flags=%d,offset=%d.\n",
                pkt->stream_index,
                av_ts2str(pkt->pts),
                av_ts2str(pkt->dts),
-               pkt->size, pkt->duration, pkt->flags);
+               pkt->size, pkt->duration, pkt->flags,pkt->offset);
 
     return ret;
 }
@@ -1695,8 +1705,9 @@ int av_read_frame(AVFormatContext *s, AVPacket *pkt)
               ? read_from_packet_buffer(&s->internal->packet_buffer,
                                         &s->internal->packet_buffer_end, pkt)
               : read_frame_internal(s, pkt);
-        if (ret < 0)
+        if (ret < 0){
             return ret;
+        }
         goto return_packet;
     }
 
@@ -1751,19 +1762,20 @@ int av_read_frame(AVFormatContext *s, AVPacket *pkt)
             if (pktl && ret != AVERROR(EAGAIN)) {
                 eof = 1;
                 continue;
-            } else
+            } else{
                 return ret;
+            }
         }
 
         ret = add_to_pktbuf(&s->internal->packet_buffer, pkt,
                             &s->internal->packet_buffer_end, 1);
         av_packet_unref(pkt);
-        if (ret < 0)
+        if (ret < 0){
             return ret;
+        }
     }
 
 return_packet:
-
     st = s->streams[pkt->stream_index];
     if ((s->iformat->flags & AVFMT_GENERIC_INDEX) && pkt->flags & AV_PKT_FLAG_KEY) {
         ff_reduce_index(s, st->index);
@@ -1774,6 +1786,8 @@ return_packet:
         pkt->dts -= RELATIVE_TS_BASE;
     if (is_relative(pkt->pts))
         pkt->pts -= RELATIVE_TS_BASE;
+
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] av_read_frame ctx=%x stream=%x stream_index=%d pkt=%x offset=%d.\n", s,st,pkt->stream_index,pkt,pkt->offset);
 
     return ret;
 }
@@ -3375,9 +3389,9 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
         if (!strcmp(ic->iformat->name, "mpeg") || !strcmp(ic->iformat->name, "mpegts"))
             max_stream_analyze_duration = 7*AV_TIME_BASE;
     }
-
+    av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_find_stream_info iformat name=%s",ic->iformat->name);
     if (ic->pb)
-        av_log(ic, AV_LOG_DEBUG, "Before avformat_find_stream_info() pos: %"PRId64" bytes read:%"PRId64" seeks:%d nb_streams:%d\n",
+        av_log(ic, AV_LOG_DEBUG, "[wml] Before avformat_find_stream_info() pos: %"PRId64" bytes read:%"PRId64" seeks:%d nb_streams:%d\n",
                avio_tell(ic->pb), ic->pb->bytes_read, ic->pb->seek_count, ic->nb_streams);
 
     for (i = 0; i < ic->nb_streams; i++) {
@@ -3385,7 +3399,7 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
         AVDictionary *thread_opt = NULL;
         st = ic->streams[i];
         avctx = st->internal->avctx;
-
+        av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_find_stream_info stream[%d]=%x avctx=%x",i,st,avctx);
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
             st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
 /*            if (!st->time_base.num)
@@ -3519,7 +3533,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
             if (!(ic->ctx_flags & AVFMTCTX_NOHEADER)) {
                 /* If we found the info for all the codecs, we can stop. */
                 ret = count;
-                av_log(ic, AV_LOG_DEBUG, "All info found\n");
+                av_log(ic, AV_LOG_DEBUG, "[wml] All info found\n");
                 flush_codecs = 0;
                 break;
             }
@@ -4265,6 +4279,8 @@ FF_ENABLE_DEPRECATION_WARNINGS
     }
 
     st->index      = s->nb_streams;
+    st->offset      = s->offset;  /*wml default fov*/
+    av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_new_stream %x AVFormatContext %x offset=%d.\n",st,s, s->offset);
     st->start_time = AV_NOPTS_VALUE;
     st->duration   = AV_NOPTS_VALUE;
     st->first_dts     = AV_NOPTS_VALUE;
@@ -4318,7 +4334,6 @@ AVProgram *av_new_program(AVFormatContext *ac, int id)
 
     program->start_time =
     program->end_time   = AV_NOPTS_VALUE;
-    av_log(ac, AV_LOG_TRACE, "[wml] new_program: id=0x%04x discard=%d\n", id,program->discard);
     return program;
 }
 

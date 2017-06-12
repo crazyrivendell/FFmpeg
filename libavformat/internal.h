@@ -27,6 +27,12 @@
 #include "avformat.h"
 #include "os_support.h"
 
+// support dynamic_streaming hls or rtmp
+#ifdef DYNAMIC_STREAM
+#undef DYNAMIC_STREAM
+#endif
+#define DYNAMIC_STREAM 1
+
 #define MAX_URL_SIZE 4096
 
 /** size of probe buffer, for guessing file type from file contents */

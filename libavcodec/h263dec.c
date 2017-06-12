@@ -417,6 +417,7 @@ int ff_h263_decode_frame(AVCodecContext *avctx, void *data, int *got_frame,
     AVFrame *pict = data;
 
     /* no supplementary picture */
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] ff_h263_decode_frame in avctx=%x pkt=%x.\n",avctx,avpkt);
     if (buf_size == 0) {
         /* special case for last picture */
         if (s->low_delay == 0 && s->next_picture_ptr) {

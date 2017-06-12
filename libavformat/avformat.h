@@ -890,6 +890,8 @@ typedef struct AVStream {
      * encoding: set by the user, replaced by libavformat if left unset
      */
     int id;
+
+    int offset; /*wml fov*/
 #if FF_API_LAVF_AVCTX
     /**
      * @deprecated use the codecpar struct instead
@@ -1361,6 +1363,13 @@ typedef struct AVFormatContext {
     void *priv_data;
 
     /**
+     * fov of the first frame of the component
+     * Demuxing only, set by libavformat.
+     */
+    int offset_req;
+    int offset; /*[wml] fov*/
+
+    /**
      * I/O context.
      *
      * - demuxing: either set by the user before avformat_open_input() (then
@@ -1373,7 +1382,7 @@ typedef struct AVFormatContext {
      * I/O in some other way and this field will be NULL.
      */
     AVIOContext *pb;
-
+    
     /* stream info */
     /**
      * Flags signalling stream properties. A combination of AVFMTCTX_*.
@@ -1416,19 +1425,6 @@ typedef struct AVFormatContext {
      * Demuxing only, set by libavformat.
      */
     int64_t start_time;
-
-    /**
-     * fov of the first frame of the component
-     * Demuxing only, set by libavformat.
-     */
-    int offset_req;
-    int offset; /*[wml] fov*/
-    
-
-    /**
-     * current segments when play hls queue index
-     */
-    int seg_index; /*[wml]*/
 
     /**
      * Duration of the stream, in AV_TIME_BASE fractional

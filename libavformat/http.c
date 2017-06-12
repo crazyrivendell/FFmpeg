@@ -494,7 +494,7 @@ static int http_open(URLContext *h, const char *uri, int flags,
 {
     HTTPContext *s = h->priv_data;
     int ret;
-
+    av_log(NULL,AV_LOG_DEBUG,"[wml] http_open in.\n");
     s->app_ctx = (AVApplicationContext *)(intptr_t)s->app_ctx_intptr;
 
     if( s->seekable == 1 )

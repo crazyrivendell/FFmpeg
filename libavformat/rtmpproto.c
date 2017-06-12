@@ -133,6 +133,11 @@ typedef struct RTMPContext {
 } RTMPContext;
 
 #define PLAYER_KEY_OPEN_PART_LEN 30   ///< length of partial key used for first client digest signing
+
+#if DYNAMIC_STREAM
+extern int offset_timestamp;
+#endif
+
 /** Client key used for digest signing */
 static const uint8_t rtmp_player_key[] = {
     'G', 'e', 'n', 'u', 'i', 'n', 'e', ' ', 'A', 'd', 'o', 'b', 'e', ' ',
@@ -2613,7 +2618,7 @@ static int rtmp_open(URLContext *s, const char *uri, int flags)
     int port;
     AVDictionary *opts = NULL;
     int ret;
-
+    av_log(NULL, AV_LOG_INFO, "[wml] rtmp_open in.\n");
     if (rt->listen_timeout > 0)
         rt->listen = 1;
 
@@ -2820,7 +2825,7 @@ reconnect:
     rt->server_bw = 2500000;
     rt->duration = 0;
 
-    av_log(s, AV_LOG_DEBUG, "Proto = %s, path = %s, app = %s, fname = %s\n",
+    av_log(s, AV_LOG_DEBUG, "[wml] Proto = %s, path = %s, app = %s, fname = %s\n",
            proto, path, rt->app, rt->playpath);
     if (!rt->listen) {
         if ((ret = gen_connect(s, rt)) < 0)
@@ -2906,7 +2911,14 @@ static int rtmp_read(URLContext *s, uint8_t *buf, int size)
     RTMPContext *rt = s->priv_data;
     int orig_size = size;
     int ret;
-
+    /* [wml] */
+    #if DYNAMIC_STREAM
+    if (size == -1024){
+        av_log(s, AV_LOG_DEBUG, "[wml] start close rtmp connection at timestamp=%d,flv_off=%d.\n",rt->last_timestamp,rt->flv_off);
+        offset_timestamp = rt->last_timestamp;
+        return rtmp_close (s);
+    }
+    #endif
     while (size > 0) {
         int data_left = rt->flv_size - rt->flv_off;
 
@@ -2925,6 +2937,7 @@ static int rtmp_read(URLContext *s, uint8_t *buf, int size)
         if ((ret = get_packet(s, 0)) < 0)
            return ret;
     }
+    
     return orig_size;
 }
 
@@ -2952,8 +2965,7 @@ static int rtmp_pause(URLContext *s, int pause)
 {
     RTMPContext *rt = s->priv_data;
     int ret;
-    av_log(s, AV_LOG_DEBUG, "Pause at timestamp %d\n",
-           rt->last_timestamp);
+    av_log(s, AV_LOG_DEBUG, "[wml] Pause at timestamp %d\n",rt->last_timestamp);
     if ((ret = gen_pause(s, rt, pause, rt->last_timestamp)) < 0) {
         av_log(s, AV_LOG_ERROR, "Unable to send pause command at timestamp %d\n",
                rt->last_timestamp);

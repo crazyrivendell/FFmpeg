@@ -43,7 +43,6 @@ FF_ENABLE_DEPRECATION_WARNINGS
 #endif
     pkt->flags                = 0;
     pkt->stream_index         = 0;
-
     pkt->offset = 0; /*[wml]*/
     pkt->buf                  = NULL;
     pkt->side_data            = NULL;

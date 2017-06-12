@@ -127,6 +127,9 @@ unsigned long ff_crcA001_update(unsigned long checksum, const uint8_t *buf,
  */
 int ffio_open_dyn_packet_buf(AVIOContext **s, int max_packet_size);
 
+/* wml*/
+int ffio_fdopen2(AVIOContext *s, URLContext *h,uint8_t *buffer,int buffer_size);
+
 /**
  * Create and initialize a AVIOContext for accessing the
  * resource referenced by the URLContext h.

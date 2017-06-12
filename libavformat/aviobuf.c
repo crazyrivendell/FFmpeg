@@ -870,6 +870,23 @@ static int64_t io_read_seek(void *opaque, int stream_index, int64_t timestamp, i
     return internal->h->prot->url_read_seek(internal->h, stream_index, timestamp, flags);
 }
 
+/* wml used for dynamic stream*/
+int ffio_fdopen2(AVIOContext *s, URLContext *h,uint8_t *buffer,int buffer_size)
+{
+    AVIOInternal *internal = NULL;
+    int  max_packet_size;
+
+    internal = (AVIOInternal *) s->opaque;
+    
+    internal->h = h;
+    if (!buffer_size) {
+        buffer_size = IO_BUFFER_SIZE;
+    }
+    ffio_init_context(s, buffer, buffer_size, h->flags & AVIO_FLAG_WRITE, s->opaque, io_read_packet, io_write_packet, io_read_seek);
+
+    return 0;
+}
+
 int ffio_fdopen(AVIOContext **s, URLContext *h)
 {
     AVIOInternal *internal = NULL;

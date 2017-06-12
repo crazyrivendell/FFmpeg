@@ -114,7 +114,7 @@ struct MpegTSContext {
     AVFormatContext *stream;
     /** raw packet size, including FEC if present */
     int raw_packet_size;
-
+    int offset; /*wml fov*/
     int size_stat[3];
     int size_stat_count;
 #define SIZE_STAT_THRESHOLD 10
@@ -913,7 +913,8 @@ static int new_pes_packet(PESContext *pes, AVPacket *pkt)
     /* store position of first TS packet of this PES packet */
     pkt->pos   = pes->ts_packet_pos;
     pkt->flags = pes->flags;
-
+    pkt->offset = pes->ts->offset; /* wml */
+    
     pes->buffer = NULL;
     reset_pes_packet_state(pes);
 
@@ -2615,7 +2616,7 @@ static int mpegts_read_header(AVFormatContext *s)
     uint8_t buf[8 * 1024] = {0};
     int len;
     int64_t pos, probesize = s->probesize;
-
+    
     if (ffio_ensure_seekback(pb, probesize) < 0)
         av_log(s, AV_LOG_WARNING, "Failed to allocate buffers for seekback\n");
 
@@ -2761,6 +2762,9 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     pkt->size = -1;
     ts->pkt = pkt;
+    
+    s->streams[0]->offset = ts->offset = s->offset; /* wml */
+    
     ret = handle_packets(ts, 0);
     if (ret < 0) {
         av_packet_unref(ts->pkt);
@@ -2781,6 +2785,7 @@ static int mpegts_read_packet(AVFormatContext *s, AVPacket *pkt)
 
     if (!ret && pkt->size < 0)
         ret = AVERROR_INVALIDDATA;
+    
     return ret;
 }
 

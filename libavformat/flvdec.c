@@ -33,6 +33,7 @@
 #include "libavcodec/bytestream.h"
 #include "libavcodec/mpeg4audio.h"
 #include "avformat.h"
+#include "avio_internal.h"
 #include "internal.h"
 #include "avio_internal.h"
 #include "flv.h"
@@ -66,7 +67,19 @@ typedef struct FLVContext {
     int keyframe_count;
     int64_t *keyframe_times;
     int64_t *keyframe_filepositions;
+
+    #if DYNAMIC_STREAM
+    int offset_req;
+    uint8_t* read_buffer;
+    #endif
 } FLVContext;
+
+#if DYNAMIC_STREAM
+#define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
+char offset_url[MAX_URL_SIZE];
+static int changed_flag = 0;
+int offset_timestamp = 0;
+#endif
 
 static int probe(AVProbeData *p, int live)
 {
@@ -690,6 +703,11 @@ static int flv_read_header(AVFormatContext *s)
     flv->sum_flv_tag_size = 0;
     flv->last_keyframe_stream_index = -1;
 
+    /*wml*/
+    flv->offset_req = 0;
+    memset(offset_url,0,MAX_URL_SIZE);
+    strcpy(offset_url,s->filename);
+
     return 0;
 }
 
@@ -701,6 +719,13 @@ static int flv_read_close(AVFormatContext *s)
         av_freep(&flv->new_extradata[i]);
     av_freep(&flv->keyframe_times);
     av_freep(&flv->keyframe_filepositions);
+
+    /*wml free read_buffer*/
+    if(flv->offset_req){
+        av_free(flv->read_buffer);
+        flv->offset_req = 0;
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close free read buffer.\n");
+    }
     return 0;
 }
 
@@ -893,6 +918,49 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
     int last = -1;
     int orig_size;
 
+    #if DYNAMIC_STREAM
+    changed_flag = 0;
+    #endif
+
+    /*wml*/
+    #if DYNAMIC_STREAM
+    if(s->offset_req){
+        if(!flv->offset_req){
+            flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
+            flv->offset_req = 1;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer.\n");
+            //TODO: use two same-length buffer for seek and change;
+        }
+        
+        int ret1 = 0;
+        URLContext *h;
+        AVDictionary *opts = NULL;
+        void *internal = NULL;
+        
+        if(strcmp(offset_url,"rtmp://192.168.50.26:1935/live/demo2") == 0){
+            memset(offset_url,0,MAX_URL_SIZE);
+            strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo1");
+        }
+        else if(strcmp(offset_url,"rtmp://192.168.50.26:1935/live/demo1") == 0){
+            memset(offset_url,0,MAX_URL_SIZE);
+            strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo2");
+        }
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet ctx=%x,pkt=%x,offset_url=%s.\n",s,pkt,offset_url);
+
+        internal = s->pb->opaque;
+        ret1 = s->pb->read_packet(internal,NULL,-1024);
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet close rtmp connection.\n");
+        /*step1:update URLContext*/
+        ret1 = ffurl_open_whitelist (&h, offset_url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist, 
+            s->protocol_blacklist, NULL);
+        ffio_fdopen2(s->pb,h,s->pb->buffer,s->pb->buffer_size);
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet restart rtmp connection.\n");
+        /*step2: seek to correct timestamp*/
+       ret1 = s->pb->read_seek(s->pb->opaque,1,offset_timestamp,0);
+        
+        s->offset_req = 0;
+    }
+    #endif
 retry:
     /* pkt size is repeated at end. skip it */
         pos  = avio_tell(s->pb);
@@ -979,7 +1047,7 @@ skip:
             ret = FFERROR_REDO;
             goto leave;
         }
-
+        
         /* now find stream */
         for (i = 0; i < s->nb_streams; i++) {
             st = s->streams[i];

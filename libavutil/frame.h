@@ -454,6 +454,8 @@ typedef struct AVFrame {
      */
     int64_t pkt_pos;
 
+    int pkt_offset;/* wml fov of the pkt*/
+
     /**
      * duration of the corresponding packet, expressed in
      * AVStream->time_base units, 0 if unknown.

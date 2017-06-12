@@ -436,6 +436,9 @@ int ff_thread_decode_frame(AVCodecContext *avctx,
         *got_picture_ptr = p->got_frame;
         picture->pkt_dts = p->avpkt.dts;
 
+        picture->pkt_offset = p->avpkt.offset; /*wml */
+        av_log(NULL,AV_LOG_DEBUG,"[wml] ff_thread_decode_frame picture offset=%d .\n",picture->pkt_offset);
+
         if (p->result < 0)
             err = p->result;
 

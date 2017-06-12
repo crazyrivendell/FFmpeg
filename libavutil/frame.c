@@ -109,6 +109,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
     frame->pkt_duration        = 0;
     frame->pkt_pos             = -1;
     frame->pkt_size            = -1;
+    frame->pkt_offset         = 0; /*wml init fov*/
     frame->key_frame           = 1;
     frame->sample_aspect_ratio = (AVRational){ 0, 1 };
     frame->format              = -1; /* unknown */
