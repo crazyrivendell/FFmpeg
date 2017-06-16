@@ -2944,6 +2944,7 @@ static int rtmp_read(URLContext *s, uint8_t *buf, int size)
 static int64_t rtmp_seek(URLContext *s, int stream_index, int64_t timestamp,
                          int flags)
 {
+    av_log(NULL,AV_LOG_DEBUG,"[wml] rtmp_seek %p.\n",s);
     RTMPContext *rt = s->priv_data;
     int ret;
     av_log(s, AV_LOG_DEBUG,

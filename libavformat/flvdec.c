@@ -42,6 +42,18 @@
 
 #define RESYNC_BUFFER_SIZE (1<<20)
 
+#if DYNAMIC_STREAM
+#define RTMP_MAX_OFFSET 4
+
+struct offsetlist {
+    char url[MAX_URL_SIZE];
+    AVIOContext pb;
+    AVFormatContext *parent;
+    int offset_fov; 
+    AVPacket pkt;
+};
+#endif
+
 typedef struct FLVContext {
     const AVClass *class; ///< Class for private options.
     int trust_metadata;   ///< configure streams according onMetaData
@@ -69,8 +81,14 @@ typedef struct FLVContext {
     int64_t *keyframe_filepositions;
 
     #if DYNAMIC_STREAM
+    int n_offsetlists;
+    struct offsetlist **offsetlists;
+    int cur_offset_fov;
     int offset_req;
     uint8_t* read_buffer;
+
+    int64_t old_last_dts;
+    int64_t new_first_dts;
     #endif
 } FLVContext;
 
@@ -690,6 +708,7 @@ static int flv_read_header(AVFormatContext *s)
     FLVContext *flv = s->priv_data;
     int offset;
 
+    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_header in.\n");
     avio_skip(s->pb, 4);
     avio_r8(s->pb); // flags
 
@@ -918,25 +937,23 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
     int last = -1;
     int orig_size;
 
-    #if DYNAMIC_STREAM
-    changed_flag = 0;
-    #endif
-
     /*wml*/
     #if DYNAMIC_STREAM
     if(s->offset_req){
-        if(!flv->offset_req){
-            flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
-            flv->offset_req = 1;
-            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer.\n");
-            //TODO: use two same-length buffer for seek and change;
-        }
-        
         int ret1 = 0;
         URLContext *h;
         AVDictionary *opts = NULL;
         void *internal = NULL;
+        void * temp_buffer = NULL;
         
+        /*wml alloc new buffer for new rtmp-connection*/
+        if(!flv->offset_req){
+            flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
+            flv->offset_req = 1;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer name.\n",s->filename);
+            //TODO: use two same-length buffer for seek and change;
+        }
+
         if(strcmp(offset_url,"rtmp://192.168.50.26:1935/live/demo2") == 0){
             memset(offset_url,0,MAX_URL_SIZE);
             strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo1");
@@ -945,7 +962,7 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             memset(offset_url,0,MAX_URL_SIZE);
             strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo2");
         }
-        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet ctx=%x,pkt=%x,offset_url=%s.\n",s,pkt,offset_url);
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet ctx=%p,pkt=%p,offset_url=%s.\n",s,pkt,offset_url);
 
         internal = s->pb->opaque;
         ret1 = s->pb->read_packet(internal,NULL,-1024);
@@ -954,15 +971,33 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
         ret1 = ffurl_open_whitelist (&h, offset_url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist, 
             s->protocol_blacklist, NULL);
         ffio_fdopen2(s->pb,h,s->pb->buffer,s->pb->buffer_size);
-        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet restart rtmp connection.\n");
+        /*if(changed_flag == 1){
+            ffio_fdopen2(s->pb,h,s->pb->buffer,s->pb->buffer_size);
+            changed_flag = 0;
+        }
+        else{
+            ffio_fdopen2(s->pb,h,flv->read_buffer,READ_BUFFER_SIZE);
+            changed_flag = 1;
+        }*/
+        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet flv_read_packet restart rtmp connection %p %s.\n",s->pb->opaque,h->filename);
         /*step2: seek to correct timestamp*/
-       ret1 = s->pb->read_seek(s->pb->opaque,1,offset_timestamp,0);
-        
+        //ret1 = s->pb->read_seek(s->pb->opaque,1,offset_timestamp,0);
+        //s->iformat->read_seek(s,1,offset_timestamp,0);
         s->offset_req = 0;
     }
     #endif
 retry:
     /* pkt size is repeated at end. skip it */
+        /** wml packet header 15-byte
+        * Field 	                              Data Type 	Default 	Details
+        * Size of previous packet  uint32_be 	0 	        For first packet set to NULL
+        * Packet Type 	            uint8 	        18 	        For first packet set to AMF Metadata
+        * Payload Size 	            uint24_be 	varies      Size of packet data only
+        * Timestamp Lower 	   uint24_be 	0 	        For first packet set to NULL
+        * Timestamp Upper 	   uint8 	        0 	        Extension to create a uint32_be value
+        * Stream ID 	            uint24_be 	0 	        For first stream of same type set to NULL
+        * Payload Data 	            freeform 	varies      Data as defined by packet type
+        **/
         pos  = avio_tell(s->pb);
         type = (avio_r8(s->pb) & 0x1F);
         orig_size =
@@ -970,7 +1005,7 @@ retry:
         flv->sum_flv_tag_size += size + 11;
         dts  = avio_rb24(s->pb);
         dts |= (unsigned)avio_r8(s->pb) << 24;
-        av_log(s, AV_LOG_TRACE, "type:%d, size:%d, last:%d, dts:%"PRId64" pos:%"PRId64"\n", type, size, last, dts, avio_tell(s->pb));
+        av_log(NULL, AV_LOG_DEBUG, "[wml] type:%d, size:%d, last:%d, dts:%"PRId64" pos:%"PRId64"\n", type, size, last, dts, avio_tell(s->pb));
         if (avio_feof(s->pb))
             return AVERROR_EOF;
         avio_skip(s->pb, 3); /* stream id, always 0 */
@@ -1254,6 +1289,14 @@ retry_duration:
             ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_KEY) ||
             stream_type == FLV_STREAM_TYPE_DATA)
         pkt->flags |= AV_PKT_FLAG_KEY;
+
+    #if DYNAMIC_STREAM
+    /* [wml] notify the last packet dts */
+    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
+    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
+        flv->old_last_dts = pkt->dts;
+    }
+    #endif
 
 leave:
     last = avio_rb32(s->pb);
