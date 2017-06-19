@@ -45,11 +45,20 @@
 #if DYNAMIC_STREAM
 #define RTMP_MAX_OFFSET 4
 
-struct offsetlist {
+typedef struct AVIOInternal {
+    URLContext *h;
+} AVIOInternal;
+
+struct offsetflv {
     char url[MAX_URL_SIZE];
-    AVIOContext pb;
+    AVIOContext *pb;
+    URLContext *h; 
+    uint8_t* read_buffer;
+    int buffer_size;
     AVFormatContext *parent;
-    int offset_fov; 
+    int index;
+    
+    int offset;  /*fov*/
     AVPacket pkt;
 };
 #endif
@@ -81,22 +90,68 @@ typedef struct FLVContext {
     int64_t *keyframe_filepositions;
 
     #if DYNAMIC_STREAM
-    int n_offsetlists;
-    struct offsetlist **offsetlists;
+    int n_offsetflvs;
+    struct offsetflv **offsetflvs;
     int cur_offset_fov;
     int offset_req;
-    uint8_t* read_buffer;
 
     int64_t old_last_dts;
     int64_t new_first_dts;
+    int resync_fov;
+    int fov_receive_try;
+    int intend_fov;
     #endif
 } FLVContext;
 
 #if DYNAMIC_STREAM
 #define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
 char offset_url[MAX_URL_SIZE];
-static int changed_flag = 0;
 int offset_timestamp = 0;
+
+static void reset_packet(AVPacket *pkt)
+{
+    av_init_packet(pkt);
+    pkt->data = NULL;
+}
+
+static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const char *url)
+{
+    struct offsetflv *offset_flv = av_mallocz(sizeof(struct offsetflv));
+    if (!offset_flv)
+        return NULL;
+    
+    reset_packet(&offset_flv->pkt);
+    strcpy(offset_flv ->url,url);
+    offset_flv->parent = s;
+    offset_flv->offset = 0; /* default fov*/
+    dynarray_add(&c->offsetflvs, &c->n_offsetflvs, offset_flv);
+
+    if(c->n_offsetflvs){/* the first flv do not need malloc buffer, use is->ic->pb->buffer*/
+        offset_flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
+        offset_flv->buffer_size = READ_BUFFER_SIZE;
+    }
+    
+    av_log(NULL,AV_LOG_DEBUG,"[wml] new_offsetflv %s %d",offset_flv->url,c->n_offsetflvs);
+    return offset_flv;
+}
+
+static void free_offsetflv_list(FLVContext *c)
+{
+    int i;
+    for (i = 0; i < c->n_offsetflvs; i++) {
+        struct offsetflv* offset_flv = c->offsetflvs[i];
+
+        av_packet_unref(&offset_flv->pkt);
+        if(i != 0){
+            av_free(offset_flv->pb);
+            av_free(offset_flv->read_buffer);
+        }
+        av_free(offset_flv);
+    }
+    av_freep(&c->offsetflvs);
+    c->n_offsetflvs = 0;
+}
+
 #endif
 
 static int probe(AVProbeData *p, int live)
@@ -741,7 +796,8 @@ static int flv_read_close(AVFormatContext *s)
 
     /*wml free read_buffer*/
     if(flv->offset_req){
-        av_free(flv->read_buffer);
+        //s->pb->read_packet(s->pb->opaque,NULL,-1024);
+        free_offsetflv_list(flv);
         flv->offset_req = 0;
         av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close free read buffer.\n");
     }
@@ -923,6 +979,341 @@ static int resync(AVFormatContext *s)
     return AVERROR_EOF;
 }
 
+static int read_data(AVFormatContext *s, AVPacket *pkt)
+{
+    FLVContext *flv = s->priv_data;
+    int ret, i, size, flags;
+    enum FlvTagType type;
+    int stream_type=-1;
+    int64_t next, pos, meta_pos;
+    int64_t dts, pts = AV_NOPTS_VALUE;
+    int av_uninit(channels);
+    int av_uninit(sample_rate);
+    AVStream *st    = NULL;
+    int last = -1;
+    int orig_size;
+
+retry:
+    /* pkt size is repeated at end. skip it */
+        /** wml packet header 15-byte
+        * Field 	                              Data Type 	Default 	Details
+        * Size of previous packet  uint32_be 	0 	        For first packet set to NULL
+        * Packet Type 	            uint8 	        18 	        For first packet set to AMF Metadata
+        * Payload Size 	            uint24_be 	varies      Size of packet data only
+        * Timestamp Lower 	   uint24_be 	0 	        For first packet set to NULL
+        * Timestamp Upper 	   uint8 	        0 	        Extension to create a uint32_be value
+        * Stream ID 	            uint24_be 	0 	        For first stream of same type set to NULL
+        * Payload Data 	            freeform 	varies      Data as defined by packet type
+        **/
+        pos  = avio_tell(s->pb);
+        type = (avio_r8(s->pb) & 0x1F);
+        orig_size =
+        size = avio_rb24(s->pb);
+        flv->sum_flv_tag_size += size + 11;
+        dts  = avio_rb24(s->pb);
+        dts |= (unsigned)avio_r8(s->pb) << 24;
+        av_log(NULL, AV_LOG_DEBUG, "[wml] read_data type:%d, size:%d, last:%d, dts:%"PRId64" pos:%"PRId64"\n", type, size, last, dts, avio_tell(s->pb));
+        if (avio_feof(s->pb))
+            return AVERROR_EOF;
+        avio_skip(s->pb, 3); /* stream id, always 0 */
+        flags = 0;
+
+        if (size == 0) {
+            ret = FFERROR_REDO;
+            goto leave;
+        }
+
+        next = size + avio_tell(s->pb);
+
+        if (type == FLV_TAG_TYPE_AUDIO) {
+            stream_type = FLV_STREAM_TYPE_AUDIO;
+            flags    = avio_r8(s->pb);
+            size--;
+        } else if (type == FLV_TAG_TYPE_VIDEO) {
+            stream_type = FLV_STREAM_TYPE_VIDEO;
+            flags    = avio_r8(s->pb);
+            size--;
+            if ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_VIDEO_INFO_CMD)
+                goto skip;
+        } else if (type == FLV_TAG_TYPE_META) {
+            stream_type=FLV_STREAM_TYPE_DATA;
+            if (size > 13 + 1 + 4) { // Header-type metadata stuff
+                int type;
+                meta_pos = avio_tell(s->pb);
+                type = flv_read_metabody(s, next);
+                if (type == 0 && dts == 0 || type < 0 || type == TYPE_UNKNOWN) {
+                    if (type < 0 && flv->validate_count &&
+                        flv->validate_index[0].pos     > next &&
+                        flv->validate_index[0].pos - 4 < next
+                    ) {
+                        av_log(s, AV_LOG_WARNING, "Adjusting next position due to index mismatch\n");
+                        next = flv->validate_index[0].pos - 4;
+                    }
+                    goto skip;
+                } else if (type == TYPE_ONTEXTDATA) {
+                    avpriv_request_sample(s, "OnTextData packet");
+                    return flv_data_packet(s, pkt, dts, next);
+                } else if (type == TYPE_ONCAPTION) {
+                    return flv_data_packet(s, pkt, dts, next);
+                }
+                avio_seek(s->pb, meta_pos, SEEK_SET);
+            }
+        } else {
+            av_log(s, AV_LOG_DEBUG,
+                   "Skipping flv packet: type %d, size %d, flags %d.\n",
+                   type, size, flags);
+skip:
+            avio_seek(s->pb, next, SEEK_SET);
+            ret = FFERROR_REDO;
+            goto leave;
+        }
+
+        /* skip empty data packets */
+        if (!size) {
+            ret = FFERROR_REDO;
+            goto leave;
+        }
+        
+        /* now find stream */
+        for (i = 0; i < s->nb_streams; i++) {
+            st = s->streams[i];
+            if (stream_type == FLV_STREAM_TYPE_AUDIO) {
+                if (st->codecpar->codec_type == AVMEDIA_TYPE_AUDIO &&
+                    (s->audio_codec_id || flv_same_audio_codec(st->codecpar, flags)))
+                    break;
+            } else if (stream_type == FLV_STREAM_TYPE_VIDEO) {
+                if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO &&
+                    (s->video_codec_id || flv_same_video_codec(st->codecpar, flags)))
+                    break;
+            } else if (stream_type == FLV_STREAM_TYPE_DATA) {
+                if (st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE)
+                    break;
+            }
+        }
+        if (i == s->nb_streams) {
+            static const enum AVMediaType stream_types[] = {AVMEDIA_TYPE_VIDEO, AVMEDIA_TYPE_AUDIO, AVMEDIA_TYPE_SUBTITLE};
+            av_log(s, AV_LOG_WARNING, "%s stream discovered after head already parsed\n", av_get_media_type_string(stream_types[stream_type]));
+            st = create_stream(s, stream_types[stream_type]);
+            if (!st)
+                return AVERROR(ENOMEM);
+
+        }
+        av_log(s, AV_LOG_TRACE, "%d %X %d \n", stream_type, flags, st->discard);
+
+        if (s->pb->seekable &&
+            ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_KEY ||
+              stream_type == FLV_STREAM_TYPE_AUDIO))
+            av_add_index_entry(st, pos, dts, size, 0, AVINDEX_KEYFRAME);
+
+        if (  (st->discard >= AVDISCARD_NONKEY && !((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_KEY || (stream_type == FLV_STREAM_TYPE_AUDIO)))
+            ||(st->discard >= AVDISCARD_BIDIR  &&  ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_DISP_INTER && (stream_type == FLV_STREAM_TYPE_VIDEO)))
+            || st->discard >= AVDISCARD_ALL
+        ) {
+            avio_seek(s->pb, next, SEEK_SET);
+            ret = FFERROR_REDO;
+            goto leave;
+        }
+
+    // if not streamed and no duration from metadata then seek to end to find
+    // the duration from the timestamps
+    if (s->pb->seekable && (!s->duration || s->duration == AV_NOPTS_VALUE) &&
+        !flv->searched_for_end) {
+        int size;
+        const int64_t pos   = avio_tell(s->pb);
+        // Read the last 4 bytes of the file, this should be the size of the
+        // previous FLV tag. Use the timestamp of its payload as duration.
+        int64_t fsize       = avio_size(s->pb);
+retry_duration:
+        avio_seek(s->pb, fsize - 4, SEEK_SET);
+        size = avio_rb32(s->pb);
+        if (size > 0 && size < fsize) {
+            // Seek to the start of the last FLV tag at position (fsize - 4 - size)
+            // but skip the byte indicating the type.
+            avio_seek(s->pb, fsize - 3 - size, SEEK_SET);
+            if (size == avio_rb24(s->pb) + 11) {
+                uint32_t ts = avio_rb24(s->pb);
+                ts         |= avio_r8(s->pb) << 24;
+                if (ts)
+                    s->duration = ts * (int64_t)AV_TIME_BASE / 1000;
+                else if (fsize >= 8 && fsize - 8 >= size) {
+                    fsize -= size+4;
+                    goto retry_duration;
+                }
+            }
+        }
+
+        avio_seek(s->pb, pos, SEEK_SET);
+        flv->searched_for_end = 1;
+    }
+
+    if (stream_type == FLV_STREAM_TYPE_AUDIO) {
+        int bits_per_coded_sample;
+        channels = (flags & FLV_AUDIO_CHANNEL_MASK) == FLV_STEREO ? 2 : 1;
+        sample_rate = 44100 << ((flags & FLV_AUDIO_SAMPLERATE_MASK) >>
+                                FLV_AUDIO_SAMPLERATE_OFFSET) >> 3;
+        bits_per_coded_sample = (flags & FLV_AUDIO_SAMPLESIZE_MASK) ? 16 : 8;
+        if (!st->codecpar->channels || !st->codecpar->sample_rate ||
+            !st->codecpar->bits_per_coded_sample) {
+            st->codecpar->channels              = channels;
+            st->codecpar->channel_layout        = channels == 1
+                                               ? AV_CH_LAYOUT_MONO
+                                               : AV_CH_LAYOUT_STEREO;
+            st->codecpar->sample_rate           = sample_rate;
+            st->codecpar->bits_per_coded_sample = bits_per_coded_sample;
+        }
+        if (!st->codecpar->codec_id) {
+            flv_set_audio_codec(s, st, st->codecpar,
+                                flags & FLV_AUDIO_CODECID_MASK);
+            flv->last_sample_rate =
+            sample_rate           = st->codecpar->sample_rate;
+            flv->last_channels    =
+            channels              = st->codecpar->channels;
+        } else {
+            AVCodecParameters *par = avcodec_parameters_alloc();
+            if (!par) {
+                ret = AVERROR(ENOMEM);
+                goto leave;
+            }
+            par->sample_rate = sample_rate;
+            par->bits_per_coded_sample = bits_per_coded_sample;
+            flv_set_audio_codec(s, st, par, flags & FLV_AUDIO_CODECID_MASK);
+            sample_rate = par->sample_rate;
+            avcodec_parameters_free(&par);
+        }
+    } else if (stream_type == FLV_STREAM_TYPE_VIDEO) {
+        size -= flv_set_video_codec(s, st, flags & FLV_VIDEO_CODECID_MASK, 1);
+    } else if (stream_type == FLV_STREAM_TYPE_DATA) {
+        st->codecpar->codec_id = AV_CODEC_ID_TEXT;
+    }
+
+    if (st->codecpar->codec_id == AV_CODEC_ID_AAC ||
+        st->codecpar->codec_id == AV_CODEC_ID_H264 ||
+        st->codecpar->codec_id == AV_CODEC_ID_MPEG4) {
+        int type = avio_r8(s->pb);
+        size--;
+        if (st->codecpar->codec_id == AV_CODEC_ID_H264 || st->codecpar->codec_id == AV_CODEC_ID_MPEG4) {
+            // sign extension
+            int32_t cts = (avio_rb24(s->pb) + 0xff800000) ^ 0xff800000;
+            pts = dts + cts;
+            if (cts < 0) { // dts might be wrong
+                if (!flv->wrong_dts)
+                    av_log(s, AV_LOG_WARNING,
+                        "Negative cts, previous timestamps might be wrong.\n");
+                flv->wrong_dts = 1;
+            } else if (FFABS(dts - pts) > 1000*60*15) {
+                av_log(s, AV_LOG_WARNING,
+                       "invalid timestamps %"PRId64" %"PRId64"\n", dts, pts);
+                dts = pts = AV_NOPTS_VALUE;
+            }
+        }
+        if (type == 0 && (!st->codecpar->extradata || st->codecpar->codec_id == AV_CODEC_ID_AAC ||
+            st->codecpar->codec_id == AV_CODEC_ID_H264)) {
+            AVDictionaryEntry *t;
+
+            if (st->codecpar->extradata) {
+                if ((ret = flv_queue_extradata(flv, s->pb, stream_type, size)) < 0)
+                    return ret;
+                ret = FFERROR_REDO;
+                goto leave;
+            }
+            if ((ret = flv_get_extradata(s, st, size)) < 0)
+                return ret;
+
+            /* Workaround for buggy Omnia A/XE encoder */
+            t = av_dict_get(s->metadata, "Encoder", NULL, 0);
+            if (st->codecpar->codec_id == AV_CODEC_ID_AAC && t && !strcmp(t->value, "Omnia A/XE"))
+                st->codecpar->extradata_size = 2;
+
+            if (st->codecpar->codec_id == AV_CODEC_ID_AAC && 0) {
+                MPEG4AudioConfig cfg;
+
+                if (avpriv_mpeg4audio_get_config(&cfg, st->codecpar->extradata,
+                                                 st->codecpar->extradata_size * 8, 1) >= 0) {
+                st->codecpar->channels       = cfg.channels;
+                st->codecpar->channel_layout = 0;
+                if (cfg.ext_sample_rate)
+                    st->codecpar->sample_rate = cfg.ext_sample_rate;
+                else
+                    st->codecpar->sample_rate = cfg.sample_rate;
+                av_log(s, AV_LOG_TRACE, "mp4a config channels %d sample rate %d\n",
+                        st->codecpar->channels, st->codecpar->sample_rate);
+                }
+            }
+
+            ret = FFERROR_REDO;
+            goto leave;
+        }
+    }
+
+    /* skip empty data packets */
+    if (!size) {
+        ret = FFERROR_REDO;
+        goto leave;
+    }
+
+    ret = av_get_packet(s->pb, pkt, size);
+    if (ret < 0)
+        return ret;
+    pkt->dts          = dts;
+    pkt->pts          = pts == AV_NOPTS_VALUE ? dts : pts;
+    pkt->stream_index = st->index;
+    pkt->pos          = pos;
+    if (flv->new_extradata[stream_type]) {
+        uint8_t *side = av_packet_new_side_data(pkt, AV_PKT_DATA_NEW_EXTRADATA,
+                                                flv->new_extradata_size[stream_type]);
+        if (side) {
+            memcpy(side, flv->new_extradata[stream_type],
+                   flv->new_extradata_size[stream_type]);
+            av_freep(&flv->new_extradata[stream_type]);
+            flv->new_extradata_size[stream_type] = 0;
+        }
+    }
+    if (stream_type == FLV_STREAM_TYPE_AUDIO &&
+                    (sample_rate != flv->last_sample_rate ||
+                     channels    != flv->last_channels)) {
+        flv->last_sample_rate = sample_rate;
+        flv->last_channels    = channels;
+        ff_add_param_change(pkt, channels, 0, sample_rate, 0, 0);
+    }
+
+    if (    stream_type == FLV_STREAM_TYPE_AUDIO ||
+            ((flags & FLV_VIDEO_FRAMETYPE_MASK) == FLV_FRAME_KEY) ||
+            stream_type == FLV_STREAM_TYPE_DATA)
+        pkt->flags |= AV_PKT_FLAG_KEY;
+
+leave:
+    last = avio_rb32(s->pb);
+
+    if (last != orig_size + 11 && last != orig_size + 10 &&
+        !avio_feof(s->pb) &&
+        (last != orig_size || !last) && last != flv->sum_flv_tag_size &&
+        !flv->broken_sizes) {
+        av_log(s, AV_LOG_ERROR, "[wml] read_data Packet mismatch %d %d %d\n", last, orig_size + 11, flv->sum_flv_tag_size);
+        avio_seek(s->pb, pos + 1, SEEK_SET);
+        ret = resync(s);
+        av_packet_unref(pkt);
+        if (ret >= 0) {
+            goto retry;
+        }
+    }
+    #if DYNAMIC_STREAM
+    av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
+    if(type != FLV_TAG_TYPE_AUDIO && type != FLV_TAG_TYPE_VIDEO)
+        goto retry;
+    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
+        if(flv->fov_receive_try){
+            flv->new_first_dts = pkt->dts;
+            flv->fov_receive_try = 0;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt new_first_dts=%llu.\n",flv->new_first_dts);
+        }
+        else
+            flv->old_last_dts = pkt->dts;
+    }
+#endif
+    return ret;
+}
+
+
 static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
     FLVContext *flv = s->priv_data;
@@ -937,54 +1328,65 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
     int last = -1;
     int orig_size;
 
-    /*wml*/
+     /*wml*/
     #if DYNAMIC_STREAM
     if(s->offset_req){
-        int ret1 = 0;
-        URLContext *h;
-        AVDictionary *opts = NULL;
-        void *internal = NULL;
-        void * temp_buffer = NULL;
+        struct offsetflv *offset_flv1;
+        struct offsetflv *offset_flv2;
         
-        /*wml alloc new buffer for new rtmp-connection*/
         if(!flv->offset_req){
-            flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
+            offset_flv1 = new_offsetflv(flv, s,(const char *)s->filename);
+            if(offset_flv1){
+                offset_flv1->index = 0;
+                offset_flv1->offset = 0;
+                offset_flv1->pb = s->pb;
+                offset_flv1->read_buffer = s->pb->buffer;
+                offset_flv1->buffer_size = s->pb->buffer_size;
+            }
+            if(strcmp(s->filename ,"rtmp://192.168.50.26:1935/live/demo1") == 0)
+                offset_flv2 = new_offsetflv(flv, s,"rtmp://192.168.50.26:1935/live/demo2");
+            else if(strcmp(s->filename,"rtmp://192.168.50.26:1935/live/demo2") == 0)
+                offset_flv2 = new_offsetflv(flv, s,"rtmp://192.168.50.26:1935/live/demo1");
+            if(offset_flv2){
+                offset_flv2->index = 1;
+                offset_flv2->offset = 1;
+                offset_flv2->pb = s->pb;
+            }
             flv->offset_req = 1;
-            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer name.\n",s->filename);
-            //TODO: use two same-length buffer for seek and change;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer name=%s.\n",s->filename);
         }
+        
+        if(flv->offset_req && !flv->resync_fov){
+            int ret1 = 0;
+            URLContext *h;
+            AVDictionary *opts = NULL;
+            AVIOInternal *internal = NULL;
 
-        if(strcmp(offset_url,"rtmp://192.168.50.26:1935/live/demo2") == 0){
-            memset(offset_url,0,MAX_URL_SIZE);
-            strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo1");
+            internal = (AVIOInternal *)s->pb->opaque;
+            flv->offsetflvs[flv->cur_offset_fov]->h = internal->h;
+            //ret1 = s->pb->read_packet(internal,NULL,-1024);
+            if(flv->cur_offset_fov == 0){
+                flv->intend_fov = 1;
+            }
+            else{
+                flv->intend_fov = 0;
+            }
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet  change to %s current_fov=%d,intend_fov=%d.\n",flv->offsetflvs[flv->intend_fov]->url,flv->cur_offset_fov,flv->intend_fov);
+            ret1 = ffurl_open_whitelist (&h, flv->offsetflvs[flv->intend_fov]->url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist,s->protocol_blacklist, NULL); 
+            ffio_fdopen2(s->pb,h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
+            flv->resync_fov = 1;
+            flv->fov_receive_try = 1;
+            
+            read_data (s,&flv->offsetflvs[flv->intend_fov]->pkt);
+            flv->offsetflvs[flv->intend_fov]->h = h;
+            //internal = s->pb->opaque;
+            //ret1 = s->pb->read_packet(internal,NULL,-1024);
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->cur_offset_fov]->url);
+            ffio_fdopen2(s->pb,flv->offsetflvs[flv->cur_offset_fov]->h,flv->offsetflvs[flv->cur_offset_fov]->read_buffer,flv->offsetflvs[flv->cur_offset_fov]->buffer_size);
+            s->offset_req = 0;
         }
-        else if(strcmp(offset_url,"rtmp://192.168.50.26:1935/live/demo1") == 0){
-            memset(offset_url,0,MAX_URL_SIZE);
-            strcpy(offset_url,"rtmp://192.168.50.26:1935/live/demo2");
-        }
-        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet ctx=%p,pkt=%p,offset_url=%s.\n",s,pkt,offset_url);
-
-        internal = s->pb->opaque;
-        ret1 = s->pb->read_packet(internal,NULL,-1024);
-        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet close rtmp connection.\n");
-        /*step1:update URLContext*/
-        ret1 = ffurl_open_whitelist (&h, offset_url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist, 
-            s->protocol_blacklist, NULL);
-        ffio_fdopen2(s->pb,h,s->pb->buffer,s->pb->buffer_size);
-        /*if(changed_flag == 1){
-            ffio_fdopen2(s->pb,h,s->pb->buffer,s->pb->buffer_size);
-            changed_flag = 0;
-        }
-        else{
-            ffio_fdopen2(s->pb,h,flv->read_buffer,READ_BUFFER_SIZE);
-            changed_flag = 1;
-        }*/
-        av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet flv_read_packet restart rtmp connection %p %s.\n",s->pb->opaque,h->filename);
-        /*step2: seek to correct timestamp*/
-        //ret1 = s->pb->read_seek(s->pb->opaque,1,offset_timestamp,0);
-        //s->iformat->read_seek(s,1,offset_timestamp,0);
-        s->offset_req = 0;
     }
+    
     #endif
 retry:
     /* pkt size is repeated at end. skip it */
@@ -1290,14 +1692,6 @@ retry_duration:
             stream_type == FLV_STREAM_TYPE_DATA)
         pkt->flags |= AV_PKT_FLAG_KEY;
 
-    #if DYNAMIC_STREAM
-    /* [wml] notify the last packet dts */
-    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
-    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
-        flv->old_last_dts = pkt->dts;
-    }
-    #endif
-
 leave:
     last = avio_rb32(s->pb);
     if (last != orig_size + 11 && last != orig_size + 10 &&
@@ -1312,6 +1706,27 @@ leave:
             goto retry;
         }
     }
+    #if DYNAMIC_STREAM
+    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
+    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
+        if(flv->fov_receive_try){
+            flv->new_first_dts = pkt->dts;
+            flv->fov_receive_try = 0;
+        }
+        else{
+            flv->old_last_dts = pkt->dts;
+            if(flv->resync_fov && flv->old_last_dts >= flv->new_first_dts){
+                flv->resync_fov = 0;
+                av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt old_last_dts=%llu new_first_dts=%llu.\n",flv->old_last_dts,flv->new_first_dts);
+                s->pb->read_packet(s->pb->opaque,NULL,-1024);
+                av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->intend_fov]->url);
+                ffio_fdopen2(s->pb,flv->offsetflvs[flv->intend_fov]->h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
+                flv->cur_offset_fov = flv->intend_fov;
+            }
+        }
+    }
+    #endif
+    
     return ret;
 }
 

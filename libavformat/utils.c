@@ -874,7 +874,7 @@ int ff_read_packet(AVFormatContext *s, AVPacket *pkt)
         if((strcmp(s->iformat->name, "mpegts") == 0) ||(strcmp(s->iformat->name, "flv") == 0))
         {
             pkt->offset = s->offset;
-            av_log(NULL,AV_LOG_DEBUG,"[wml] ff_read_packet ctx=%x pkt=%x set offset=%d",s,pkt,pkt->offset);
+            av_log(NULL,AV_LOG_DEBUG,"[wml] ff_read_packet ctx=%p pkt=%p set offset=%d",s,pkt,pkt->offset);
         }
         err = add_to_pktbuf(&s->internal->raw_packet_buffer, pkt,
                             &s->internal->raw_packet_buffer_end, 0);
@@ -3399,7 +3399,7 @@ int avformat_find_stream_info(AVFormatContext *ic, AVDictionary **options)
         AVDictionary *thread_opt = NULL;
         st = ic->streams[i];
         avctx = st->internal->avctx;
-        av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_find_stream_info stream[%d]=%x avctx=%x",i,st,avctx);
+        av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_find_stream_info stream[%d]=%p avctx=%p",i,st,avctx);
         if (st->codecpar->codec_type == AVMEDIA_TYPE_VIDEO ||
             st->codecpar->codec_type == AVMEDIA_TYPE_SUBTITLE) {
 /*            if (!st->time_base.num)
@@ -4280,7 +4280,7 @@ FF_ENABLE_DEPRECATION_WARNINGS
 
     st->index      = s->nb_streams;
     st->offset      = s->offset;  /*wml default fov*/
-    av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_new_stream %x AVFormatContext %x offset=%d.\n",st,s, s->offset);
+    av_log(NULL, AV_LOG_DEBUG,"[wml] avformat_new_stream %p AVFormatContext %p offset=%d.\n",st,s, s->offset);
     st->start_time = AV_NOPTS_VALUE;
     st->duration   = AV_NOPTS_VALUE;
     st->first_dts     = AV_NOPTS_VALUE;
