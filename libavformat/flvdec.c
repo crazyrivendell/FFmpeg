@@ -43,7 +43,7 @@
 #define RESYNC_BUFFER_SIZE (1<<20)
 
 #if DYNAMIC_STREAM
-#define RTMP_MAX_OFFSET 4
+#define RTMP_MAX_PACKET 3  /* must greater than 0, suggest set 1 to 6 */
 
 typedef struct AVIOInternal {
     URLContext *h;
@@ -59,7 +59,9 @@ struct offsetflv {
     int index;
     
     int offset;  /*fov*/
-    AVPacket pkt;
+    //AVPacket pkt;
+    int n_pkts;
+    struct AVPacket **pkts;
 };
 #endif
 
@@ -90,27 +92,40 @@ typedef struct FLVContext {
     int64_t *keyframe_filepositions;
 
     #if DYNAMIC_STREAM
-    int n_offsetflvs;
-    struct offsetflv **offsetflvs;
-    int cur_offset_fov;
-    int offset_req;
+    int n_offsetflvs; /*number of fov*/
+    struct offsetflv **offsetflvs; /* each fov*/
+    int cur_offset_fov; /* current offset fov*/
+    int intend_fov; /* next fov */
+    int offset_req; /* offset change status */
 
-    int64_t old_last_dts;
-    int64_t new_first_dts;
-    int resync_fov;
-    int fov_receive_try;
-    int intend_fov;
+    int64_t old_last_dts; /* last pkt dts of old fov */
+    int64_t new_first_dts; /* first pkt dts of new fov*/
+    int fov_receive_try; /* status of buffer new fov packet */
+    int resync_fov; /* resync fov status */
+    int resync_fov_buffer; /* resync new buffer status (buffer RTMP_MAX_PACKET pkt)*/
     #endif
 } FLVContext;
 
 #if DYNAMIC_STREAM
 #define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
-char offset_url[MAX_URL_SIZE];
+static int pkt_index = 1;
 
 static void reset_packet(AVPacket *pkt)
 {
     av_init_packet(pkt);
     pkt->data = NULL;
+}
+
+static AVPacket * new_packet(void)
+{
+    struct AVPacket *pkt = av_mallocz(sizeof(struct AVPacket));
+    if (!pkt)
+        return NULL;
+    
+    av_init_packet(pkt);
+    pkt->data = NULL;
+
+    return pkt;
 }
 
 static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const char *url)
@@ -119,16 +134,14 @@ static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const c
     if (!offset_flv)
         return NULL;
     
-    reset_packet(&offset_flv->pkt);
+    //reset_packet(&offset_flv->pkt);
     strcpy(offset_flv ->url,url);
     offset_flv->parent = s;
-    offset_flv->offset = 0; /* default fov*/
-    dynarray_add(&c->offsetflvs, &c->n_offsetflvs, offset_flv);
-
     if(c->n_offsetflvs){/* the first flv do not need malloc buffer, use is->ic->pb->buffer*/
         offset_flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
         offset_flv->buffer_size = READ_BUFFER_SIZE;
     }
+    dynarray_add(&c->offsetflvs, &c->n_offsetflvs, offset_flv);
     
     av_log(NULL,AV_LOG_DEBUG,"[wml] new_offsetflv %s %d",offset_flv->url,c->n_offsetflvs);
     return offset_flv;
@@ -136,11 +149,16 @@ static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const c
 
 static void free_offsetflv_list(FLVContext *c)
 {
-    int i;
+    int i,j;
     for (i = 0; i < c->n_offsetflvs; i++) {
         struct offsetflv* offset_flv = c->offsetflvs[i];
 
-        av_packet_unref(&offset_flv->pkt);
+        //av_packet_unref(&offset_flv->pkt);
+        for(j = 0;j< RTMP_MAX_PACKET;j++){
+            av_packet_unref(offset_flv->pkts[j]);
+            av_free(offset_flv->pkts[j]);
+        }
+        av_freep(&offset_flv->pkts);
         if(i != 0){
             av_free(offset_flv->pb);
             av_free(offset_flv->read_buffer);
@@ -778,8 +796,6 @@ static int flv_read_header(AVFormatContext *s)
 
     /*wml*/
     flv->offset_req = 0;
-    memset(offset_url,0,MAX_URL_SIZE);
-    strcpy(offset_url,s->filename);
 
     return 0;
 }
@@ -1305,8 +1321,6 @@ leave:
             flv->fov_receive_try = 0;
             av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt new_first_dts=%llu.\n",flv->new_first_dts);
         }
-        else
-            flv->old_last_dts = pkt->dts;
     }
 #endif
     return ret;
@@ -1329,6 +1343,17 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
 
      /*wml*/
     #if DYNAMIC_STREAM
+    if(flv->offset_req && flv->resync_fov_buffer){
+            if(pkt_index == RTMP_MAX_PACKET){
+                pkt_index = 1;
+                flv->resync_fov_buffer = 0;
+                goto retry;
+            }
+            pkt = flv->offsetflvs[flv->cur_offset_fov]->pkts[pkt_index];
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p pkt_index=%d.\n",pkt,pkt_index);
+            pkt_index++;
+            return 0;
+    }
     if(s->offset_req){
         struct offsetflv *offset_flv1;
         struct offsetflv *offset_flv2;
@@ -1356,7 +1381,7 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
         }
         
         if(flv->offset_req && !flv->resync_fov){
-            int ret1 = 0;
+            int j = 0;
             URLContext *h;
             AVDictionary *opts = NULL;
             AVIOInternal *internal = NULL;
@@ -1371,12 +1396,22 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
                 flv->intend_fov = 0;
             }
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet  change to %s current_fov=%d,intend_fov=%d.\n",flv->offsetflvs[flv->intend_fov]->url,flv->cur_offset_fov,flv->intend_fov);
-            ret1 = ffurl_open_whitelist (&h, flv->offsetflvs[flv->intend_fov]->url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist,s->protocol_blacklist, NULL); 
+            ffurl_open_whitelist (&h, flv->offsetflvs[flv->intend_fov]->url, AVIO_FLAG_READ,&s->interrupt_callback, &opts, s->protocol_whitelist,s->protocol_blacklist, NULL); 
             ffio_fdopen2(s->pb,h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
             flv->resync_fov = 1;
             flv->fov_receive_try = 1;
             
-            read_data (s,&flv->offsetflvs[flv->intend_fov]->pkt);
+            //read_data (s,&flv->offsetflvs[flv->intend_fov]->pkt);
+            for(j = 0;j < RTMP_MAX_PACKET;j++){
+                AVPacket* pkt = NULL;
+
+                pkt = new_packet();
+                if(pkt){
+                    dynarray_add(&flv->offsetflvs[flv->intend_fov]->pkts, &flv->offsetflvs[flv->intend_fov]->n_pkts, pkt);
+                    read_data(s,flv->offsetflvs[flv->intend_fov]->pkts[j]);
+                    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p %p n_pkts=%d.\n",pkt,flv->offsetflvs[flv->intend_fov]->pkts[j],flv->offsetflvs[flv->intend_fov]->n_pkts);
+                }
+            }
             flv->offsetflvs[flv->intend_fov]->h = h;
             //internal = s->pb->opaque;
             //ret1 = s->pb->read_packet(internal,NULL,-1024);
@@ -1708,21 +1743,19 @@ leave:
     #if DYNAMIC_STREAM
     //av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
     if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
-        if(flv->fov_receive_try){
-            flv->new_first_dts = pkt->dts;
-            flv->fov_receive_try = 0;
-        }
-        else{
-            flv->old_last_dts = pkt->dts;
-            if(flv->resync_fov && flv->old_last_dts >= flv->new_first_dts){
-                flv->resync_fov = 0;
-                av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt old_last_dts=%llu new_first_dts=%llu.\n",flv->old_last_dts,flv->new_first_dts);
-                s->pb->read_packet(s->pb->opaque,NULL,-1024);
-                av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->intend_fov]->url);
-                ffio_fdopen2(s->pb,flv->offsetflvs[flv->intend_fov]->h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
-                flv->cur_offset_fov = flv->intend_fov;
-                pkt = &flv->offsetflvs[flv->intend_fov]->pkt;
-            }
+        flv->old_last_dts = pkt->dts;
+        if(flv->resync_fov && flv->old_last_dts >= flv->new_first_dts){
+            flv->resync_fov = 0;
+            av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt old_last_dts=%llu new_first_dts=%llu.\n",flv->old_last_dts,flv->new_first_dts);
+            s->pb->read_packet(s->pb->opaque,NULL,-1024);
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->intend_fov]->url);
+            ffio_fdopen2(s->pb,flv->offsetflvs[flv->intend_fov]->h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
+            flv->cur_offset_fov = flv->intend_fov;
+            //pkt = &flv->offsetflvs[flv->intend_fov]->pkt;
+            pkt = flv->offsetflvs[flv->cur_offset_fov]->pkts[0];
+            av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p cur_offset_fov=%d.\n",pkt,flv->cur_offset_fov);
+            flv->resync_fov_buffer = 1;
+            flv->intend_fov = -1;
         }
     }
     #endif
