@@ -106,7 +106,6 @@ typedef struct FLVContext {
 #if DYNAMIC_STREAM
 #define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
 char offset_url[MAX_URL_SIZE];
-int offset_timestamp = 0;
 
 static void reset_packet(AVPacket *pkt)
 {
@@ -1407,7 +1406,7 @@ retry:
         flv->sum_flv_tag_size += size + 11;
         dts  = avio_rb24(s->pb);
         dts |= (unsigned)avio_r8(s->pb) << 24;
-        av_log(NULL, AV_LOG_DEBUG, "[wml] type:%d, size:%d, last:%d, dts:%"PRId64" pos:%"PRId64"\n", type, size, last, dts, avio_tell(s->pb));
+        //av_log(NULL, AV_LOG_DEBUG, "[wml] type:%d, size:%d, last:%d, dts:%"PRId64" pos:%"PRId64"\n", type, size, last, dts, avio_tell(s->pb));
         if (avio_feof(s->pb))
             return AVERROR_EOF;
         avio_skip(s->pb, 3); /* stream id, always 0 */
@@ -1707,7 +1706,7 @@ leave:
         }
     }
     #if DYNAMIC_STREAM
-    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
     if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
         if(flv->fov_receive_try){
             flv->new_first_dts = pkt->dts;
@@ -1722,6 +1721,7 @@ leave:
                 av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->intend_fov]->url);
                 ffio_fdopen2(s->pb,flv->offsetflvs[flv->intend_fov]->h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
                 flv->cur_offset_fov = flv->intend_fov;
+                pkt = &flv->offsetflvs[flv->intend_fov]->pkt;
             }
         }
     }

@@ -134,9 +134,6 @@ typedef struct RTMPContext {
 
 #define PLAYER_KEY_OPEN_PART_LEN 30   ///< length of partial key used for first client digest signing
 
-#if DYNAMIC_STREAM
-extern int offset_timestamp;
-#endif
 
 /** Client key used for digest signing */
 static const uint8_t rtmp_player_key[] = {
@@ -2861,7 +2858,7 @@ reconnect:
             goto fail;
         rt->flv_off  = 0;
         memcpy(rt->flv_data, "FLV\1\0\0\0\0\011\0\0\0\0", rt->flv_size);
-
+        av_log(s, AV_LOG_DEBUG, "[wml] 0.\n");
         // Read packets until we reach the first A/V packet or read metadata.
         // If there was a metadata package in front of the A/V packets, we can
         // build the FLV header from this. If we do not receive any metadata,
@@ -2871,7 +2868,7 @@ reconnect:
             if ((ret = get_packet(s, 0)) < 0)
                goto fail;
         }
-
+        av_log(s, AV_LOG_DEBUG, "[wml] 1.\n");
         // Either after we have read the metadata or (if there is none) the
         // first packet of an A/V stream, we have a better knowledge about the
         // streams, so set the FLV header accordingly.
@@ -2915,7 +2912,6 @@ static int rtmp_read(URLContext *s, uint8_t *buf, int size)
     #if DYNAMIC_STREAM
     if (size == -1024){
         av_log(s, AV_LOG_DEBUG, "[wml] start close rtmp connection at timestamp=%d,flv_off=%d.\n",rt->last_timestamp,rt->flv_off);
-        offset_timestamp = rt->last_timestamp;
         return rtmp_close (s);
     }
     #endif
