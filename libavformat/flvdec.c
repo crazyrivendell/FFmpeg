@@ -59,7 +59,6 @@ struct offsetflv {
     int index;
     
     int offset;  /*fov*/
-    //AVPacket pkt;
     int n_pkts;
     struct AVPacket **pkts;
 };
@@ -110,12 +109,6 @@ typedef struct FLVContext {
 #define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
 static int pkt_index = 1;
 
-static void reset_packet(AVPacket *pkt)
-{
-    av_init_packet(pkt);
-    pkt->data = NULL;
-}
-
 static AVPacket * new_packet(void)
 {
     struct AVPacket *pkt = av_mallocz(sizeof(struct AVPacket));
@@ -130,11 +123,11 @@ static AVPacket * new_packet(void)
 
 static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const char *url)
 {
+    int j;
     struct offsetflv *offset_flv = av_mallocz(sizeof(struct offsetflv));
     if (!offset_flv)
         return NULL;
     
-    //reset_packet(&offset_flv->pkt);
     strcpy(offset_flv ->url,url);
     offset_flv->parent = s;
     if(c->n_offsetflvs){/* the first flv do not need malloc buffer, use is->ic->pb->buffer*/
@@ -142,6 +135,16 @@ static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const c
         offset_flv->buffer_size = READ_BUFFER_SIZE;
     }
     dynarray_add(&c->offsetflvs, &c->n_offsetflvs, offset_flv);
+    // init pkts
+    for(j = 0;j < RTMP_MAX_PACKET;j++){
+        AVPacket* pkt = NULL;
+
+        pkt = new_packet();
+        if(pkt){
+            dynarray_add(&offset_flv->pkts, &offset_flv->n_pkts, pkt);
+            av_log(NULL,AV_LOG_DEBUG,"[wml] new_offsetflv pkt=%p %p n_pkts=%d.\n",pkt,offset_flv->pkts[j],offset_flv->n_pkts);
+        }
+    }
     
     av_log(NULL,AV_LOG_DEBUG,"[wml] new_offsetflv %s %d",offset_flv->url,c->n_offsetflvs);
     return offset_flv;
@@ -154,7 +157,7 @@ static void free_offsetflv_list(FLVContext *c)
         struct offsetflv* offset_flv = c->offsetflvs[i];
 
         //av_packet_unref(&offset_flv->pkt);
-        for(j = 0;j< RTMP_MAX_PACKET;j++){
+        for(j = 0;j< offset_flv->n_pkts;j++){
             av_packet_unref(offset_flv->pkts[j]);
             av_free(offset_flv->pkts[j]);
         }
@@ -1344,9 +1347,10 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
      /*wml*/
     #if DYNAMIC_STREAM
     if(flv->offset_req && flv->resync_fov_buffer){
-            if(pkt_index == RTMP_MAX_PACKET){
+            if(pkt_index == flv->offsetflvs[flv->cur_offset_fov]->n_pkts){
                 pkt_index = 1;
                 flv->resync_fov_buffer = 0;
+                ffio_fdopen2(s->pb,flv->offsetflvs[flv->cur_offset_fov]->h,flv->offsetflvs[flv->cur_offset_fov]->read_buffer,flv->offsetflvs[flv->cur_offset_fov]->buffer_size);
                 goto retry;
             }
             pkt = flv->offsetflvs[flv->cur_offset_fov]->pkts[pkt_index];
@@ -1388,7 +1392,6 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
 
             internal = (AVIOInternal *)s->pb->opaque;
             flv->offsetflvs[flv->cur_offset_fov]->h = internal->h;
-            //ret1 = s->pb->read_packet(internal,NULL,-1024);
             if(flv->cur_offset_fov == 0){
                 flv->intend_fov = 1;
             }
@@ -1401,20 +1404,14 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             flv->resync_fov = 1;
             flv->fov_receive_try = 1;
             
-            //read_data (s,&flv->offsetflvs[flv->intend_fov]->pkt);
-            for(j = 0;j < RTMP_MAX_PACKET;j++){
-                AVPacket* pkt = NULL;
-
-                pkt = new_packet();
-                if(pkt){
-                    dynarray_add(&flv->offsetflvs[flv->intend_fov]->pkts, &flv->offsetflvs[flv->intend_fov]->n_pkts, pkt);
+            if(flv->offsetflvs[flv->intend_fov]->n_pkts){
+                 for(j = 0;j < flv->offsetflvs[flv->intend_fov]->n_pkts;j++){
                     read_data(s,flv->offsetflvs[flv->intend_fov]->pkts[j]);
-                    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p %p n_pkts=%d.\n",pkt,flv->offsetflvs[flv->intend_fov]->pkts[j],flv->offsetflvs[flv->intend_fov]->n_pkts);
+                    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt[%d]=%p.\n",j,flv->offsetflvs[flv->intend_fov]->pkts[j]);
                 }
             }
+
             flv->offsetflvs[flv->intend_fov]->h = h;
-            //internal = s->pb->opaque;
-            //ret1 = s->pb->read_packet(internal,NULL,-1024);
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->cur_offset_fov]->url);
             ffio_fdopen2(s->pb,flv->offsetflvs[flv->cur_offset_fov]->h,flv->offsetflvs[flv->cur_offset_fov]->read_buffer,flv->offsetflvs[flv->cur_offset_fov]->buffer_size);
             s->offset_req = 0;
@@ -1749,9 +1746,7 @@ leave:
             av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt old_last_dts=%llu new_first_dts=%llu.\n",flv->old_last_dts,flv->new_first_dts);
             s->pb->read_packet(s->pb->opaque,NULL,-1024);
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet re-change to name=%s.\n",flv->offsetflvs[flv->intend_fov]->url);
-            ffio_fdopen2(s->pb,flv->offsetflvs[flv->intend_fov]->h,flv->offsetflvs[flv->intend_fov]->read_buffer,flv->offsetflvs[flv->intend_fov]->buffer_size);
             flv->cur_offset_fov = flv->intend_fov;
-            //pkt = &flv->offsetflvs[flv->intend_fov]->pkt;
             pkt = flv->offsetflvs[flv->cur_offset_fov]->pkts[0];
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p cur_offset_fov=%d.\n",pkt,flv->cur_offset_fov);
             flv->resync_fov_buffer = 1;
@@ -1759,7 +1754,7 @@ leave:
         }
     }
     #endif
-    
+
     return ret;
 }
 
