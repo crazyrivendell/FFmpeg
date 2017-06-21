@@ -43,7 +43,7 @@
 #define RESYNC_BUFFER_SIZE (1<<20)
 
 #if DYNAMIC_STREAM
-#define RTMP_MAX_PACKET 3  /* must greater than 0, suggest set 1 to 6 */
+#define RTMP_MAX_PACKET 1  /* must greater than 0, suggest set 1 to 6 */
 
 typedef struct AVIOInternal {
     URLContext *h;
@@ -51,13 +51,10 @@ typedef struct AVIOInternal {
 
 struct offsetflv {
     char url[MAX_URL_SIZE];
-    AVIOContext *pb;
     URLContext *h; 
     uint8_t* read_buffer;
     int buffer_size;
-    AVFormatContext *parent;
     int index;
-    
     int offset;  /*fov*/
     int n_pkts;
     struct AVPacket **pkts;
@@ -129,7 +126,6 @@ static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const c
         return NULL;
     
     strcpy(offset_flv ->url,url);
-    offset_flv->parent = s;
     if(c->n_offsetflvs){/* the first flv do not need malloc buffer, use is->ic->pb->buffer*/
         offset_flv->read_buffer = av_mallocz (READ_BUFFER_SIZE);
         offset_flv->buffer_size = READ_BUFFER_SIZE;
@@ -161,9 +157,9 @@ static void free_offsetflv_list(FLVContext *c)
             av_packet_unref(offset_flv->pkts[j]);
             av_free(offset_flv->pkts[j]);
         }
+        offset_flv->n_pkts = 0;
         av_freep(&offset_flv->pkts);
         if(i != 0){
-            av_free(offset_flv->pb);
             av_free(offset_flv->read_buffer);
         }
         av_free(offset_flv);
@@ -819,6 +815,7 @@ static int flv_read_close(AVFormatContext *s)
         flv->offset_req = 0;
         av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close free read buffer.\n");
     }
+    av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close out.\n");
     return 0;
 }
 
@@ -1315,8 +1312,8 @@ leave:
         }
     }
     #if DYNAMIC_STREAM
-    av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
-    if(type != FLV_TAG_TYPE_AUDIO && type != FLV_TAG_TYPE_VIDEO)
+    av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu,flags=%d.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos,flags);
+    if( type != FLV_TAG_TYPE_VIDEO && ((flags & FLV_VIDEO_FRAMETYPE_MASK) != FLV_FRAME_KEY))
         goto retry;
     if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
         if(flv->fov_receive_try){
@@ -1359,15 +1356,14 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             return 0;
     }
     if(s->offset_req){
-        struct offsetflv *offset_flv1;
-        struct offsetflv *offset_flv2;
+        struct offsetflv *offset_flv1 = NULL;
+        struct offsetflv *offset_flv2 = NULL;
         
         if(!flv->offset_req){
             offset_flv1 = new_offsetflv(flv, s,(const char *)s->filename);
             if(offset_flv1){
                 offset_flv1->index = 0;
                 offset_flv1->offset = 0;
-                offset_flv1->pb = s->pb;
                 offset_flv1->read_buffer = s->pb->buffer;
                 offset_flv1->buffer_size = s->pb->buffer_size;
             }
@@ -1378,7 +1374,6 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             if(offset_flv2){
                 offset_flv2->index = 1;
                 offset_flv2->offset = 1;
-                offset_flv2->pb = s->pb;
             }
             flv->offset_req = 1;
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer name=%s.\n",s->filename);
@@ -1738,7 +1733,7 @@ leave:
         }
     }
     #if DYNAMIC_STREAM
-    //av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos);
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu,flags=%d.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos,flags);
     if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
         flv->old_last_dts = pkt->dts;
         if(flv->resync_fov && flv->old_last_dts >= flv->new_first_dts){
