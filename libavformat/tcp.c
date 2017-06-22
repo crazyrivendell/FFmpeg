@@ -337,6 +337,7 @@ static int tcp_open(URLContext *h, const char *uri, int flags)
     char hostname[1024],proto[1024],path[1024];
     char portstr[10];
 
+    av_log(NULL,AV_LOG_DEBUG,"[wml] tcp_open in %d %d.\n",s->recv_buffer_size,s->send_buffer_size);
     if (s->open_timeout < 0) {
         s->open_timeout = 15000000;
     }
@@ -488,6 +489,7 @@ static int tcp_accept(URLContext *s, URLContext **c)
     TCPContext *sc = s->priv_data;
     TCPContext *cc;
     int ret;
+    av_log(NULL,AV_LOG_DEBUG,"[wml] tcp_accept in.\n");
     av_assert0(sc->listen);
     if ((ret = ffurl_alloc(c, s->filename, s->flags, &s->interrupt_callback)) < 0)
         return ret;
@@ -503,15 +505,17 @@ static int tcp_read(URLContext *h, uint8_t *buf, int size)
 {
     TCPContext *s = h->priv_data;
     int ret;
-
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] tcp_read in %d.\n",size);
     if (!(h->flags & AVIO_FLAG_NONBLOCK)) {
         ret = ff_network_wait_fd_timeout(s->fd, 0, h->rw_timeout, &h->interrupt_callback);
         if (ret)
             return ret;
     }
     ret = recv(s->fd, buf, size, 0);
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] tcp_read ret=%d .\n",ret);
     if (ret > 0)
         av_application_did_io_tcp_read(s->app_ctx, (void*)h, ret);
+    //av_log(NULL,AV_LOG_DEBUG,"[wml] tcp_read out.\n");
     return ret < 0 ? ff_neterrno() : ret;
 }
 

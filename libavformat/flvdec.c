@@ -43,19 +43,21 @@
 #define RESYNC_BUFFER_SIZE (1<<20)
 
 #if DYNAMIC_STREAM
-#define RTMP_MAX_PACKET 1  /* must greater than 0, suggest set 1 to 6 */
+#define RTMP_MAX_PACKET 2  /* must greater than 0, suggest set 1 to 6 */
+#define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
+
 
 typedef struct AVIOInternal {
     URLContext *h;
 } AVIOInternal;
 
 struct offsetflv {
-    char url[MAX_URL_SIZE];
-    URLContext *h; 
-    uint8_t* read_buffer;
-    int buffer_size;
-    int index;
-    int offset;  /*fov*/
+    char url[MAX_URL_SIZE];  /*rtmp url */
+    URLContext *h;                   /*  URLContext save rtmp connections*/
+    uint8_t* read_buffer;  /* the buffer for offsetflv read */
+    int buffer_size; /* READ_BUFFER_SIZE  */
+    int index; /* offsetflvs list index */
+    int offset;  /*offsetflv's  offset(fov)*/
     int n_pkts;
     struct AVPacket **pkts;
 };
@@ -103,7 +105,6 @@ typedef struct FLVContext {
 } FLVContext;
 
 #if DYNAMIC_STREAM
-#define READ_BUFFER_SIZE 32768  /*must equal to IO_BUFFER_SIZE (avio_buf.c)*/
 static int pkt_index = 1;
 
 static AVPacket * new_packet(void)
@@ -793,9 +794,10 @@ static int flv_read_header(AVFormatContext *s)
     flv->sum_flv_tag_size = 0;
     flv->last_keyframe_stream_index = -1;
 
+    #if DYNAMIC_STREAM
     /*wml*/
     flv->offset_req = 0;
-
+    #endif
     return 0;
 }
 
@@ -808,6 +810,7 @@ static int flv_read_close(AVFormatContext *s)
     av_freep(&flv->keyframe_times);
     av_freep(&flv->keyframe_filepositions);
 
+    #if DYNAMIC_STREAM
     /*wml free read_buffer*/
     if(flv->offset_req){
         //s->pb->read_packet(s->pb->opaque,NULL,-1024);
@@ -816,6 +819,7 @@ static int flv_read_close(AVFormatContext *s)
         av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close free read buffer.\n");
     }
     av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_close out.\n");
+    #endif
     return 0;
 }
 
@@ -994,6 +998,7 @@ static int resync(AVFormatContext *s)
     return AVERROR_EOF;
 }
 
+#if DYNAMIC_STREAM
 static int read_data(AVFormatContext *s, AVPacket *pkt)
 {
     FLVContext *flv = s->priv_data;
@@ -1313,19 +1318,18 @@ leave:
     }
     #if DYNAMIC_STREAM
     av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu,flags=%d.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos,flags);
-    if( type != FLV_TAG_TYPE_VIDEO && ((flags & FLV_VIDEO_FRAMETYPE_MASK) != FLV_FRAME_KEY))
+    if( type != FLV_TAG_TYPE_VIDEO && flv->fov_receive_try && ((flags & FLV_VIDEO_FRAMETYPE_MASK) != FLV_FRAME_KEY))
         goto retry;
-    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
-        if(flv->fov_receive_try){
-            flv->new_first_dts = pkt->dts;
-            flv->fov_receive_try = 0;
-            av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt new_first_dts=%llu.\n",flv->new_first_dts);
-        }
+
+    if(flv->fov_receive_try){
+        flv->new_first_dts = pkt->dts;
+        flv->fov_receive_try = 0;
+        av_log(NULL,AV_LOG_DEBUG,"[wml] read_data pkt new_first_dts=%llu.\n",flv->new_first_dts);
     }
 #endif
     return ret;
 }
-
+#endif
 
 static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
 {
@@ -1367,10 +1371,17 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
                 offset_flv1->read_buffer = s->pb->buffer;
                 offset_flv1->buffer_size = s->pb->buffer_size;
             }
+            #if 1
             if(strcmp(s->filename ,"rtmp://192.168.50.26:1935/live/demo1") == 0)
                 offset_flv2 = new_offsetflv(flv, s,"rtmp://192.168.50.26:1935/live/demo2");
             else if(strcmp(s->filename,"rtmp://192.168.50.26:1935/live/demo2") == 0)
                 offset_flv2 = new_offsetflv(flv, s,"rtmp://192.168.50.26:1935/live/demo1");
+            #else
+            if(strcmp(s->filename ,"rtmp://live2.evideocloud.net/live/kandaovr001") == 0)
+                offset_flv2 = new_offsetflv(flv, s,"rtmp://live2.evideocloud.net/live/kandaovr002");
+            else if(strcmp(s->filename,"rtmp://live2.evideocloud.net/live/kandaovr002") == 0)
+                offset_flv2 = new_offsetflv(flv, s,"rtmp://live2.evideocloud.net/live/kandaovr001");
+            #endif
             if(offset_flv2){
                 offset_flv2->index = 1;
                 offset_flv2->offset = 1;
@@ -1734,7 +1745,8 @@ leave:
     }
     #if DYNAMIC_STREAM
     //av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt dts=%llu, pts=%llu,stream_index=%d,pos=%llu,flags=%d.\n",pkt->dts,pkt->pts,pkt->stream_index,pkt->pos,flags);
-    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO){
+    if(type == FLV_TAG_TYPE_AUDIO ||type == FLV_TAG_TYPE_VIDEO)
+    { //FLV_TAG_TYPE_META dts is wrong
         flv->old_last_dts = pkt->dts;
         if(flv->resync_fov && flv->old_last_dts >= flv->new_first_dts){
             flv->resync_fov = 0;
