@@ -138,6 +138,7 @@ static struct offsetflv *new_offsetflv(FLVContext *c, AVFormatContext *s,const c
 
         pkt = new_packet();
         if(pkt){
+            //pkt->offset = offset_flv->offset;
             dynarray_add(&offset_flv->pkts, &offset_flv->n_pkts, pkt);
             av_log(NULL,AV_LOG_DEBUG,"[wml] new_offsetflv pkt=%p %p n_pkts=%d.\n",pkt,offset_flv->pkts[j],offset_flv->n_pkts);
         }
@@ -1355,6 +1356,7 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
                 goto retry;
             }
             pkt = flv->offsetflvs[flv->cur_offset_fov]->pkts[pkt_index];
+            pkt->offset = flv->cur_offset_fov;
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet pkt=%p pkt_index=%d.\n",pkt,pkt_index);
             pkt_index++;
             return 0;
@@ -1760,6 +1762,7 @@ leave:
             flv->intend_fov = -1;
         }
     }
+    pkt->offset = flv->cur_offset_fov;
     #endif
 
     return ret;

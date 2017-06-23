@@ -2270,8 +2270,6 @@ int attribute_align_arg avcodec_decode_video2(AVCodecContext *avctx, AVFrame *pi
                 if (!picture->height)                     picture->height              = avctx->height;
                 if (picture->format == AV_PIX_FMT_NONE)   picture->format              = avctx->pix_fmt;
             }
-            picture->pkt_offset = avpkt->offset; /*wml */
-            //av_log(NULL, AV_LOG_DEBUG, "[wml] avcodec_decode_video2 pkt=%x picture offset=%d.\n",avpkt,picture->pkt_offset);
         }
 
 fail:
