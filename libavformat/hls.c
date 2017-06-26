@@ -2140,8 +2140,10 @@ static int hls_read_packet(AVFormatContext *s, AVPacket *pkt)
 
         *pkt = pls->pkt;
         pkt->stream_index = pls->main_streams[pls->pkt.stream_index]->index;
-        //pkt->offset = pls->parent->offset; /* useless*/
-        //av_log(NULL,AV_LOG_DEBUG,"[wml] hls_read_packet pls=%x %s stream=%x pkt=%x stream_index=%d  offset=%d. \n",pls,pls->url,pls->main_streams[pls->pkt.stream_index],pkt,pkt->stream_index,pkt->offset);
+        #if DYNAMIC_STREAM
+        /*wml:set packet's offset before push to pktqueue */
+        pkt->offset = pls->ctx->offset; 
+        #endif
         reset_packet(&c->playlists[minplaylist]->pkt);
 
         if (pkt->dts != AV_NOPTS_VALUE)
@@ -2203,7 +2205,6 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
     int stream_subdemuxer_index;
     int64_t first_timestamp, seek_timestamp, duration;
 
-    av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_seek in.\n");
     if ((flags & AVSEEK_FLAG_BYTE) ||
         !(c->variants[0]->playlists[0]->finished || c->variants[0]->playlists[0]->type == PLS_TYPE_EVENT))
         return AVERROR(ENOSYS);
@@ -2272,7 +2273,6 @@ static int hls_read_seek(AVFormatContext *s, int stream_index,
     }
 
     c->cur_timestamp = seek_timestamp;
-    av_log(s, AV_LOG_DEBUG, "[wml]  hls_read_seek out.\n");
     return 0;
 }
 

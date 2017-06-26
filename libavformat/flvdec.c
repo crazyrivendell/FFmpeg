@@ -796,8 +796,9 @@ static int flv_read_header(AVFormatContext *s)
     flv->last_keyframe_stream_index = -1;
 
     #if DYNAMIC_STREAM
-    /*wml*/
+    /*wml */
     flv->offset_req = 0;
+    flv->cur_offset_fov = 0; //TODO:init by prase filename(s->filename)
     #endif
     return 0;
 }
@@ -1369,7 +1370,7 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             offset_flv1 = new_offsetflv(flv, s,(const char *)s->filename);
             if(offset_flv1){
                 offset_flv1->index = 0;
-                offset_flv1->offset = 0;
+                offset_flv1->offset = 0;  //TODO:init by prase filename
                 offset_flv1->read_buffer = s->pb->buffer;
                 offset_flv1->buffer_size = s->pb->buffer_size;
             }
@@ -1386,7 +1387,7 @@ static int flv_read_packet(AVFormatContext *s, AVPacket *pkt)
             #endif
             if(offset_flv2){
                 offset_flv2->index = 1;
-                offset_flv2->offset = 1;
+                offset_flv2->offset = 1; //TODO:init by prase filename
             }
             flv->offset_req = 1;
             av_log(NULL,AV_LOG_DEBUG,"[wml] flv_read_packet malloc read buffer name=%s.\n",s->filename);
